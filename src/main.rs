@@ -1,25 +1,30 @@
 #![allow(unused_imports)]
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-
 use anyhow::Context;
+
+use std::io::{Read, Write};
+
+use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
 
-    for stream in listener.incoming() {
+    loop {
+
+        let stream = listener.accept().await;
+
         match stream {
-            Ok(mut stream) => {
+            Ok((mut stream, _)) => {
                 tokio::spawn(async move {
-                   let result = handle_connection(&mut stream).await.with_context(|| "Could not handle connection"); 
+                    let result = handle_connection(&mut stream).await.with_context(|| "Could not handle connection"); 
 
                     match result {
                         Ok(_) => {},
 
                         Err(err) => {
                             println!("Error: {:?}", err);
-                            stream.write_all(b"+Server Failure\r\n").expect("Could not write to client");
+                            stream.write_all(b"+Server Failure\r\n").await.with_context(|| format!("Error: {err:?}")).unwrap();
                         }
                     }
                 });
@@ -27,8 +32,10 @@ async fn main() -> anyhow::Result<()> {
 
             Err(e) => {
                 println!("error: {e:?}");
+                break;
             }
         };
+
     }
 
     Ok(())
@@ -43,7 +50,7 @@ async fn handle_connection(_stream: &mut TcpStream) -> anyhow::Result<()> {
     println!("Reading Data from socket...");
 
     loop {
-        let bytes_read = _stream.read(&mut buffer).expect("Couldn't read");
+        let bytes_read = _stream.read(&mut buffer).await?;
 
         println!("Bytes read: {}", bytes_read);
 
@@ -55,7 +62,7 @@ async fn handle_connection(_stream: &mut TcpStream) -> anyhow::Result<()> {
 
         println!("Command: {:?}", command);
 
-        _stream.write_all(b"+PONG\r\n").expect("Could not write to socket");
+        _stream.write_all(b"+PONG\r\n").await?;
     }
 
     Ok(())
