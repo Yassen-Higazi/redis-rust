@@ -10,15 +10,26 @@ fn main() {
             Ok(mut _stream) => {
                 println!("accepted new connection");
 
-                let mut buffer: Vec<u8> = vec![];
+                let mut buffer = [0u8; 512]; 
 
                 println!("Reading Data from socket...");
 
-                _stream.read_exact(&mut buffer).expect("Couldn't read");
-                
-                println!("Buffer: {buffer:?}");
+                loop {
 
-                _stream.write_all(b"+PONG\r\n").expect("Could not write to socket");
+                    let bytes_read = _stream.read(&mut buffer).expect("Couldn't read");
+
+                    println!("Bytes read: {}", bytes_read);
+
+                    if bytes_read == 0 {
+                        break; 
+                    }
+
+                    let command = String::from_utf8(buffer[0..bytes_read].to_vec()).expect("Could not convert string");
+
+                    println!("Command: {:?}", command);
+
+                    _stream.write_all(b"+PONG\r\n").expect("Could not write to socket");
+                }
             }
 
             Err(e) => {
