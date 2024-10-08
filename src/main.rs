@@ -4,10 +4,8 @@ use redis_server::listen;
 
 use std::io::{Read, Write};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-
 mod redis_server;
+mod resp;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

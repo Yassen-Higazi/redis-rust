@@ -1,6 +1,10 @@
+use std::io::Read;
+
 use anyhow::Context;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+
+use crate::resp::RespService;
 
 pub async fn listen() -> anyhow::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
@@ -21,7 +25,7 @@ pub async fn listen() -> anyhow::Result<()> {
                         Err(err) => {
                             println!("Error: {:?}", err);
                             stream
-                                .write_all(b"+Server Failure\r\n")
+                                .write_all(b"-Server Failure\r\n")
                                 .await
                                 .with_context(|| format!("Error: {err:?}"))
                                 .unwrap();
@@ -50,8 +54,6 @@ async fn handle_connection(_stream: &mut TcpStream) -> anyhow::Result<()> {
     loop {
         let bytes_read = _stream.read(&mut buffer).await?;
 
-        println!("Bytes read: {}", bytes_read);
-
         if bytes_read == 0 {
             break;
         }
@@ -59,9 +61,11 @@ async fn handle_connection(_stream: &mut TcpStream) -> anyhow::Result<()> {
         let command =
             String::from_utf8(buffer[0..bytes_read].to_vec()).expect("Could not convert string");
 
-        println!("Command: {:?}", command);
+        let service = RespService::new();
 
-        _stream.write_all(b"+PONG\r\n").await?;
+        let response = service.execute_command(&command).await?;
+
+        _stream.write_all(response.as_slice()).await?;
     }
 
     Ok(())
