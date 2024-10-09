@@ -1,27 +1,129 @@
 use anyhow::bail;
+use regex::Regex;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RespDataTypes {
-    SimpleString,
+    SimpleString(String),
 
-    RespError,
+    Integer(i64),
 
-    Integer,
+    BulkString(String),
+
+    Array(Vec<Box<RespDataTypes>>),
+
+    SimpleError,
 }
 
-impl TryFrom<&str> for RespDataTypes {
+impl RespDataTypes {
+    fn len(value: &RespDataTypes) -> usize {
+        match value {
+            Self::Array(arr) => arr.len() + 1,
+
+            Self::BulkString(_) => 2,
+
+            _ => 1,
+        }
+    }
+}
+
+impl TryFrom<Vec<&str>> for RespDataTypes {
     type Error = &'static str;
 
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "+" => Ok(Self::SimpleString),
+    fn try_from(value: Vec<&str>) -> Result<Self, Self::Error> {
+        let array_re = Regex::new(r"^[*]?\d$").unwrap();
+        let bulk_array_re = Regex::new(r"^[$]?\d$").unwrap();
 
-            "-" => Ok(Self::RespError),
+        let first = value.first().unwrap_or(&"error");
 
-            ":" => Ok(Self::Integer),
+        match *first {
+            "+" => {
+                let str = value.get(1);
+
+                match str {
+                    None => Err("Invalid SimpleString"),
+
+                    Some(string) => Ok(Self::SimpleString(string.to_string())),
+                }
+            }
+
+            ":" => {
+                let num = value.get(1);
+
+                match num {
+                    None => Err("Invalid Integer"),
+
+                    Some(number_str) => {
+                        let number = number_str.parse::<i64>();
+
+                        if let Ok(value) = number {
+                            Ok(Self::Integer(value))
+                        } else {
+                            Err("Invalid Integer")
+                        }
+                    }
+                }
+            }
+
+            _ if array_re.is_match(first) => {
+                let num_of_elm = value.get(0);
+
+                match num_of_elm {
+                    None => Err("Invalid Array"),
+
+                    Some(mut n_str) => {
+
+                        let n_result = n_str.replace("*", "").parse::<i64>();
+
+                        if let Ok(n) = n_result {
+                            let mut columns: Vec<Box<RespDataTypes>> = Vec::with_capacity(n as usize);
+
+                            let mut i = 1;
+
+                            while i < value.len() as usize {
+
+                                let column_value =
+                                    RespDataTypes::try_from(value[i..].to_vec());
+
+
+                                match column_value {
+                                    Ok(final_value) => {
+                                        let len = RespDataTypes::len(&final_value);
+
+                                        i += len;
+
+                                        columns.push(Box::new(final_value));
+                                    }
+
+                                    _ => {
+                                        return column_value;
+                                    }
+                                }
+
+                            }
+
+                            Ok(Self::Array(columns.clone()))
+                        } else {
+                            Err("Invalid Array")
+                        }
+                    }
+                }
+            }
+
+            _ if bulk_array_re.is_match(first) => {
+                let string_option = value.get(1);
+
+                match string_option {
+                    None => Err("Invalid BulkString"),
+
+                    Some(string) => {
+                        Ok(Self::BulkString(string.to_string()))
+                    }
+                }
+            }
 
             _ => Err("invalid Type"),
         }
+
     }
 }
 
@@ -32,30 +134,62 @@ pub enum Commands {
     Echo(String),
 }
 
-impl TryFrom<Vec<&str>> for Commands {
+impl TryFrom<RespDataTypes> for Commands {
     type Error = &'static str;
 
-    fn try_from(value: Vec<&str>) -> Result<Self, Self::Error> {
-        let command_str = value.first();
+    fn try_from(value: RespDataTypes) -> Result<Self, Self::Error> {
+        match value {
 
-        if let Some(cmd) = command_str {
-            match *cmd {
-                "PING" => Ok(Self::Ping),
+            RespDataTypes::Array(arr) => {
+                let command_name = arr.first();
 
-                "ECHO" => {
-                    let key = value.get(1);
+                if let Some(command_name) = command_name {
+                    match command_name.as_ref() {
+                        RespDataTypes::BulkString(cmd_name) => {
+                            match cmd_name.as_str() {
+                                "ECHO" => {
+                                    let mut key = String::new();
 
-                    if let Some(key) = key {
-                        Ok(Self::Echo(key.to_string()))
-                    } else {
-                        Err("Echo Command must be followed by a key")
+                                    for i in 1..arr.len() {
+                                        let record_option = arr.get(i);
+
+                                        match record_option {
+                                            None => {
+                                                return Err("Echo command must be followed by a key");
+                                            }
+
+                                            Some(record) => {
+                                                match record.as_ref() {
+                                                    RespDataTypes::BulkString(string) => {
+                                                        key.push_str(string.as_str());
+                                                        key.push(' ');
+                                                    }
+
+                                                    RespDataTypes::Integer(int) => {
+                                                        key.push_str(int.to_string().as_str());
+                                                    }
+
+                                                    _ => return Err("Echo command must be fallowed by a key"),
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Ok(Self::Echo(key))
+                                },
+
+                                "PING" => Ok(Commands::Ping),
+
+                                _ => Err("Invalid Command"),
+                            }
+                        }
+
+                        _ => Err("Invalid command"),
                     }
-                }
-
-                _ => Err("Invalid Command"),
+                } else { Err("Invalid Command") }
             }
-        } else {
-            Err("Invalid Command")
+
+            _ => Err("Invalid Command"),
         }
     }
 }
@@ -70,24 +204,29 @@ impl RespService {
     pub async fn execute_command(&self, command: &str) -> anyhow::Result<Vec<u8>> {
         let command_vec = command.split("\r\n").collect::<Vec<&str>>();
 
-        println!("Command Vec: {command_vec:?}");
+        let data = RespDataTypes::try_from(command_vec[..command_vec.len() - 1].to_vec());
 
-        let cmd = Commands::try_from(command_vec[2..].to_vec());
+        if let Ok(data) = data {
+            let cmd = Commands::try_from(data);
 
-        println!("Command: {cmd:?}");
+            println!("Commands: {:?}", cmd);
 
-        match cmd {
-            Ok(cmd) => {
-                let response = match cmd {
-                    Commands::Ping => b"+PONG\r\n".to_vec(),
+            match cmd {
+                Ok(cmd) => {
+                    let response = match cmd {
+                        Commands::Ping => b"+PONG\r\n".to_vec(),
 
-                    Commands::Echo(message) => format!("+{message}\r\n").as_bytes().to_vec(),
-                };
+                        Commands::Echo(message) => format!("+{message}\r\n").as_bytes().to_vec(),
+                    };
 
-                Ok(response)
+                    Ok(response)
+                }
+
+                Err(message) => bail!(message),
             }
-
-            Err(message) => bail!(message),
+        } else {
+            bail!("Invalid Command");
         }
+
     }
 }

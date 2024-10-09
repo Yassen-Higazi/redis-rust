@@ -15,9 +15,7 @@ pub async fn listen() -> anyhow::Result<()> {
         match stream {
             Ok((mut stream, _)) => {
                 tokio::spawn(async move {
-                    let result = handle_connection(&mut stream)
-                        .await
-                        .with_context(|| "Could not handle connection");
+                    let result = handle_connection(&mut stream).await;
 
                     match result {
                         Ok(_) => {}
@@ -25,7 +23,7 @@ pub async fn listen() -> anyhow::Result<()> {
                         Err(err) => {
                             println!("Error: {:?}", err);
                             stream
-                                .write_all(b"-Server Failure\r\n")
+                                .write_all(format!("-{err}\r\n").as_bytes())
                                 .await
                                 .with_context(|| format!("Error: {err:?}"))
                                 .unwrap();
