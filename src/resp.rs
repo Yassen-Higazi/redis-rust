@@ -138,6 +138,8 @@ impl TryFrom<RespDataTypes> for Commands {
     type Error = &'static str;
 
     fn try_from(value: RespDataTypes) -> Result<Self, Self::Error> {
+        println!("Data: {value:?}");
+
         match value {
 
             RespDataTypes::Array(arr) => {
@@ -162,7 +164,6 @@ impl TryFrom<RespDataTypes> for Commands {
                                                 match record.as_ref() {
                                                     RespDataTypes::BulkString(string) => {
                                                         key.push_str(string.as_str());
-                                                        key.push(' ');
                                                     }
 
                                                     RespDataTypes::Integer(int) => {
