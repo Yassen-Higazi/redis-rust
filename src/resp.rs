@@ -9,7 +9,7 @@ pub enum RespDataTypes {
 
     BulkString(String),
 
-    Array(Vec<Box<RespDataTypes>>),
+    Array(Vec<RespDataTypes>),
 
     SimpleError,
 }
@@ -30,8 +30,8 @@ impl TryFrom<Vec<&str>> for RespDataTypes {
     type Error = &'static str;
 
     fn try_from(value: Vec<&str>) -> Result<Self, Self::Error> {
-        let array_re = Regex::new(r"^[*]?\d$").unwrap();
-        let bulk_array_re = Regex::new(r"^[$]?\d$").unwrap();
+        let array_re = Regex::new(r"^[*]?\d+$").unwrap();
+        let bulk_array_re = Regex::new(r"^[$]?\d+$").unwrap();
 
         let first = value.first().unwrap_or(&"error");
 
@@ -65,47 +65,34 @@ impl TryFrom<Vec<&str>> for RespDataTypes {
             }
 
             _ if array_re.is_match(first) => {
-                let num_of_elm = value.get(0);
+                let n_str = first;
 
-                match num_of_elm {
-                    None => Err("Invalid Array"),
+                let n_result = n_str.replace("*", "").parse::<i64>();
 
-                    Some(mut n_str) => {
+                if let Ok(n) = n_result {
+                    let mut columns: Vec<RespDataTypes> = Vec::with_capacity(n as usize);
 
-                        let n_result = n_str.replace("*", "").parse::<i64>();
+                    let mut i = 1;
 
-                        if let Ok(n) = n_result {
-                            let mut columns: Vec<Box<RespDataTypes>> = Vec::with_capacity(n as usize);
+                    while i < value.len() {
+                        let column_value = RespDataTypes::try_from(value[i..].to_vec());
 
-                            let mut i = 1;
+                        match column_value {
+                            Ok(final_value) => {
+                                i += RespDataTypes::len(&final_value);
 
-                            while i < value.len() as usize {
-
-                                let column_value =
-                                    RespDataTypes::try_from(value[i..].to_vec());
-
-
-                                match column_value {
-                                    Ok(final_value) => {
-                                        let len = RespDataTypes::len(&final_value);
-
-                                        i += len;
-
-                                        columns.push(Box::new(final_value));
-                                    }
-
-                                    _ => {
-                                        return column_value;
-                                    }
-                                }
-
+                                columns.push(final_value);
                             }
 
-                            Ok(Self::Array(columns.clone()))
-                        } else {
-                            Err("Invalid Array")
+                            _ => {
+                                return column_value;
+                            }
                         }
                     }
+
+                    Ok(Self::Array(columns.clone()))
+                } else {
+                    Err("Invalid Array")
                 }
             }
 
@@ -115,15 +102,12 @@ impl TryFrom<Vec<&str>> for RespDataTypes {
                 match string_option {
                     None => Err("Invalid BulkString"),
 
-                    Some(string) => {
-                        Ok(Self::BulkString(string.to_string()))
-                    }
+                    Some(string) => Ok(Self::BulkString(string.to_string())),
                 }
             }
 
             _ => Err("invalid Type"),
         }
-
     }
 }
 
@@ -141,53 +125,54 @@ impl TryFrom<RespDataTypes> for Commands {
         println!("Data: {value:?}");
 
         match value {
-
             RespDataTypes::Array(arr) => {
                 let command_name = arr.first();
 
                 if let Some(command_name) = command_name {
-                    match command_name.as_ref() {
-                        RespDataTypes::BulkString(cmd_name) => {
-                            match cmd_name.as_str() {
-                                "ECHO" => {
-                                    let mut key = String::new();
+                    match command_name {
+                        RespDataTypes::BulkString(cmd_name) => match cmd_name.as_str() {
+                            "ECHO" => {
+                                let mut key = String::new();
 
-                                    for i in 1..arr.len() {
-                                        let record_option = arr.get(i);
+                                for i in 1..arr.len() {
+                                    let record_option = arr.get(i);
 
-                                        match record_option {
-                                            None => {
-                                                return Err("Echo command must be followed by a key");
-                                            }
-
-                                            Some(record) => {
-                                                match record.as_ref() {
-                                                    RespDataTypes::BulkString(string) => {
-                                                        key.push_str(string.as_str());
-                                                    }
-
-                                                    RespDataTypes::Integer(int) => {
-                                                        key.push_str(int.to_string().as_str());
-                                                    }
-
-                                                    _ => return Err("Echo command must be fallowed by a key"),
-                                                }
-                                            }
+                                    match record_option {
+                                        None => {
+                                            return Err("Echo command must be followed by a key");
                                         }
+
+                                        Some(record) => match record {
+                                            RespDataTypes::BulkString(string) => {
+                                                key.push_str(string.as_str());
+                                            }
+
+                                            RespDataTypes::Integer(int) => {
+                                                key.push_str(int.to_string().as_str());
+                                            }
+
+                                            _ => {
+                                                return Err(
+                                                    "Echo command must be fallowed by a key",
+                                                )
+                                            }
+                                        },
                                     }
+                                }
 
-                                    Ok(Self::Echo(key))
-                                },
-
-                                "PING" => Ok(Commands::Ping),
-
-                                _ => Err("Invalid Command"),
+                                Ok(Self::Echo(key))
                             }
-                        }
+
+                            "PING" => Ok(Commands::Ping),
+
+                            _ => Err("Invalid Command"),
+                        },
 
                         _ => Err("Invalid command"),
                     }
-                } else { Err("Invalid Command") }
+                } else {
+                    Err("Invalid Command")
+                }
             }
 
             _ => Err("Invalid Command"),
@@ -228,6 +213,5 @@ impl RespService {
         } else {
             bail!("Invalid Command");
         }
-
     }
 }

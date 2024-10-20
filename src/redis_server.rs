@@ -45,7 +45,7 @@ pub async fn listen() -> anyhow::Result<()> {
 async fn handle_connection(_stream: &mut TcpStream) -> anyhow::Result<()> {
     println!("accepted new connection");
 
-    let mut buffer = [0u8; 512];
+    let mut buffer = [0u8; 2048];
 
     println!("Reading Data from socket...");
 
