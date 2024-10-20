@@ -1,10 +1,9 @@
 #![allow(unused_imports)]
-use anyhow::{Context, Ok};
+use anyhow::Ok;
 use redis_server::listen;
 
-use std::io::{Read, Write};
-
 mod redis_server;
+mod redis_service;
 mod resp;
 
 #[tokio::main]

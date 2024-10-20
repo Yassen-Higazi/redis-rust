@@ -1,21 +1,26 @@
 use std::io::Read;
 
 use anyhow::Context;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::resp::RespService;
+use crate::redis_service::RedisService;
 
 pub async fn listen() -> anyhow::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
+
+    let service = Arc::new(RedisService::new());
 
     loop {
         let stream = listener.accept().await;
 
         match stream {
             Ok((mut stream, _)) => {
+                let service_clone = Arc::clone(&service);
+
                 tokio::spawn(async move {
-                    let result = handle_connection(&mut stream).await;
+                    let result = handle_connection(&mut stream, service_clone).await;
 
                     match result {
                         Ok(_) => {}
@@ -42,7 +47,10 @@ pub async fn listen() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_connection(_stream: &mut TcpStream) -> anyhow::Result<()> {
+async fn handle_connection(
+    _stream: &mut TcpStream,
+    service: Arc<RedisService>,
+) -> anyhow::Result<()> {
     println!("accepted new connection");
 
     let mut buffer = [0u8; 2048];
@@ -58,8 +66,6 @@ async fn handle_connection(_stream: &mut TcpStream) -> anyhow::Result<()> {
 
         let command =
             String::from_utf8(buffer[0..bytes_read].to_vec()).expect("Could not convert string");
-
-        let service = RespService::new();
 
         let response = service.execute_command(&command).await?;
 

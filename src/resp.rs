@@ -116,6 +116,10 @@ pub enum Commands {
     Ping,
 
     Echo(String),
+
+    Set(String, String),
+
+    Get(String),
 }
 
 impl TryFrom<RespDataTypes> for Commands {
@@ -165,6 +169,66 @@ impl TryFrom<RespDataTypes> for Commands {
 
                             "PING" => Ok(Commands::Ping),
 
+                            "SET" => {
+                                let mut options = Vec::new();
+
+                                for i in 1..arr.len() {
+                                    let record_option = arr.get(i);
+
+                                    match record_option {
+                                        None => {
+                                            return Err("SET command must be followed by a key");
+                                        }
+
+                                        Some(record) => match record {
+                                            RespDataTypes::BulkString(string) => {
+                                                options.push(string.to_owned());
+                                            }
+
+                                            RespDataTypes::Integer(int) => {
+                                                options.push(int.to_string());
+                                            }
+
+                                            _ => {
+                                                return Err("SET command must be fallowed by a key")
+                                            }
+                                        },
+                                    }
+                                }
+
+                                Ok(Self::Set(options[0].clone(), options[1].clone()))
+                            }
+
+                            "GET" => {
+                                let mut options = Vec::new();
+
+                                for i in 1..arr.len() {
+                                    let record_option = arr.get(i);
+
+                                    match record_option {
+                                        None => {
+                                            return Err("Get command must be followed by a key");
+                                        }
+
+                                        Some(record) => match record {
+                                            RespDataTypes::BulkString(string) => {
+                                                options.push(string.to_owned());
+                                            }
+
+                                            RespDataTypes::Integer(int) => {
+                                                options.push(int.to_string());
+                                            }
+
+                                            _ => {
+                                                return Err("Get command must be fallowed by a key")
+                                            }
+                                        },
+                                    }
+                                }
+
+                                Ok(Self::Get(options[0].clone()))
+                            }
+
                             _ => Err("Invalid Command"),
                         },
 
@@ -176,42 +240,6 @@ impl TryFrom<RespDataTypes> for Commands {
             }
 
             _ => Err("Invalid Command"),
-        }
-    }
-}
-
-pub struct RespService {}
-
-impl RespService {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    pub async fn execute_command(&self, command: &str) -> anyhow::Result<Vec<u8>> {
-        let command_vec = command.split("\r\n").collect::<Vec<&str>>();
-
-        let data = RespDataTypes::try_from(command_vec[..command_vec.len() - 1].to_vec());
-
-        if let Ok(data) = data {
-            let cmd = Commands::try_from(data);
-
-            println!("Commands: {:?}", cmd);
-
-            match cmd {
-                Ok(cmd) => {
-                    let response = match cmd {
-                        Commands::Ping => b"+PONG\r\n".to_vec(),
-
-                        Commands::Echo(message) => format!("+{message}\r\n").as_bytes().to_vec(),
-                    };
-
-                    Ok(response)
-                }
-
-                Err(message) => bail!(message),
-            }
-        } else {
-            bail!("Invalid Command");
         }
     }
 }
