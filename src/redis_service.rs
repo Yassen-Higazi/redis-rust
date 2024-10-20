@@ -48,7 +48,7 @@ impl RedisService {
                                 }
                             }
 
-                            format!("+{value}\r\n").as_bytes().to_vec()
+                            "+OK\r\n".as_bytes().to_vec()
                         }
 
                         Commands::Get(key) => {
