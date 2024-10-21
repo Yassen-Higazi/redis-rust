@@ -1,5 +1,6 @@
 use anyhow::bail;
 use regex::Regex;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub enum RespDataTypes {
@@ -117,7 +118,7 @@ pub enum Commands {
 
     Echo(String),
 
-    Set(String, String),
+    Set(String, String, Option<Instant>),
 
     Get(String),
 }
@@ -196,7 +197,40 @@ impl TryFrom<RespDataTypes> for Commands {
                                     }
                                 }
 
-                                Ok(Self::Set(options[0].clone(), options[1].clone()))
+                                let mut expires_at = None;
+
+                                if let Some(exp_unit_str) = options.get(2) {
+                                    let now = Instant::now();
+
+                                    let expiration: u64;
+
+                                    if let Some(exp_duration_str) = options.get(3) {
+                                        match exp_unit_str.to_lowercase().as_str() {
+                                            "px" => {
+                                                expiration =
+                                                    exp_duration_str.parse::<u64>().unwrap_or(0);
+                                            }
+
+                                            "ex" => {
+                                                expiration =
+                                                    exp_duration_str.parse::<u64>().unwrap_or(0)
+                                                        * 1000;
+                                            }
+
+                                            _ => return Err("Invalid Duration"),
+                                        }
+
+                                        let duration = Duration::from_millis(expiration);
+
+                                        expires_at = Some(now + duration);
+                                    }
+                                }
+
+                                Ok(Self::Set(
+                                    options[0].clone(),
+                                    options[1].clone(),
+                                    expires_at,
+                                ))
                             }
 
                             "GET" => {

@@ -1,18 +1,20 @@
-use std::collections::HashMap;
-use std::sync::RwLock;
+use std::result;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use std::{collections::HashMap, time::SystemTime};
 
 use crate::resp::{Commands, RespDataTypes};
 
 use anyhow::bail;
 
 pub struct RedisService {
-    storage: RwLock<HashMap<String, String>>,
+    storage: Mutex<HashMap<String, (String, Option<Instant>)>>,
 }
 
 impl RedisService {
     pub fn new() -> Self {
         Self {
-            storage: RwLock::new(HashMap::new()),
+            storage: Mutex::new(HashMap::new()),
         }
     }
 
@@ -33,12 +35,12 @@ impl RedisService {
 
                         Commands::Echo(message) => format!("+{message}\r\n").as_bytes().to_vec(),
 
-                        Commands::Set(key, value) => {
-                            let lock = self.storage.write();
+                        Commands::Set(key, value, expiration) => {
+                            let lock = self.storage.lock();
 
                             match lock {
                                 Ok(mut storage) => {
-                                    storage.insert(key, value.clone());
+                                    storage.insert(key, (value.clone(), expiration));
                                 }
 
                                 Err(err) => {
@@ -52,17 +54,31 @@ impl RedisService {
                         }
 
                         Commands::Get(key) => {
-                            let lock = self.storage.read();
+                            let lock = self.storage.lock();
 
                             match lock {
-                                Ok(storage) => {
+                                Ok(mut storage) => {
                                     let value_opt = storage.get(&key);
 
-                                    if let Some(value) = value_opt {
-                                        format!("+{value}\r\n").as_bytes().to_vec()
-                                    } else {
-                                        bail!("Internal Error")
+                                    let mut result = "$-1\r\n".as_bytes().to_vec();
+
+                                    if let Some((value, expiration)) = value_opt {
+                                        let success = format!("${}\r\n{value}\r\n", value.len())
+                                            .as_bytes()
+                                            .to_vec();
+
+                                        if let Some(instant) = expiration {
+                                            if instant > &Instant::now() {
+                                                result = success;
+                                            } else {
+                                                storage.remove(&key);
+                                            }
+                                        } else {
+                                            result = success
+                                        }
                                     }
+
+                                    result
                                 }
 
                                 Err(err) => {
