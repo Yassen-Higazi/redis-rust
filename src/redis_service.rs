@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::Instant;
+use tokio::sync::Mutex;
 
 use crate::configs::configurations::Configuration;
 use crate::resp::{Commands, RespDataTypes};
@@ -28,8 +28,6 @@ impl RedisService {
         if let Ok(data) = data {
             let cmd = Commands::try_from(data);
 
-            println!("Commands: {:?}", cmd);
-
             match cmd {
                 Ok(cmd) => {
                     let response = match cmd {
@@ -38,57 +36,37 @@ impl RedisService {
                         Commands::Echo(message) => format!("+{message}\r\n").as_bytes().to_vec(),
 
                         Commands::Set(key, value, expiration) => {
-                            let lock = self.storage.lock();
+                            let mut storage_guard = self.storage.lock().await;
 
-                            match lock {
-                                Ok(mut storage) => {
-                                    storage.insert(key, (value.clone(), expiration));
-                                }
-
-                                Err(err) => {
-                                    eprintln!("Error: {err:?}");
-
-                                    bail!("Internal Error")
-                                }
-                            }
+                            storage_guard.insert(key, (value.clone(), expiration));
 
                             "+OK\r\n".as_bytes().to_vec()
                         }
 
                         Commands::Get(key) => {
-                            let lock = self.storage.lock();
+                            let mut storage_guard = self.storage.lock().await;
 
-                            match lock {
-                                Ok(mut storage) => {
-                                    let value_opt = storage.get(&key);
+                            let value_opt = storage_guard.get(&key);
 
-                                    let mut result = "$-1\r\n".as_bytes().to_vec();
+                            let mut result = "$-1\r\n".as_bytes().to_vec();
 
-                                    if let Some((value, expiration)) = value_opt {
-                                        let success = format!("${}\r\n{value}\r\n", value.len())
-                                            .as_bytes()
-                                            .to_vec();
+                            if let Some((value, expiration)) = value_opt {
+                                let success = format!("${}\r\n{value}\r\n", value.len())
+                                    .as_bytes()
+                                    .to_vec();
 
-                                        if let Some(instant) = expiration {
-                                            if instant > &Instant::now() {
-                                                result = success;
-                                            } else {
-                                                storage.remove(&key);
-                                            }
-                                        } else {
-                                            result = success
-                                        }
+                                if let Some(instant) = expiration {
+                                    if instant > &Instant::now() {
+                                        result = success;
+                                    } else {
+                                        storage_guard.remove(&key);
                                     }
-
-                                    result
-                                }
-
-                                Err(err) => {
-                                    eprintln!("Error: {err:?}");
-
-                                    bail!("Internal Error")
+                                } else {
+                                    result = success
                                 }
                             }
+
+                            result
                         }
 
                         Commands::Config(options) => {
@@ -102,9 +80,7 @@ impl RedisService {
 
                                             match attribute {
                                                 Some(attr) => {
-                                                    let configs = self.configs.lock().expect(
-                                                        "Could not acquire lock on configs",
-                                                    );
+                                                    let configs = self.configs.lock().await;
 
                                                     if let Some(value) = configs.get(attr) {
                                                         res.push(format!(
