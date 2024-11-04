@@ -1,9 +1,9 @@
-use anyhow::bail;
 use regex::Regex;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub enum RespDataTypes {
+    #[allow(dead_code)]
     SimpleString(String),
 
     Integer(i64),
@@ -12,6 +12,7 @@ pub enum RespDataTypes {
 
     Array(Vec<RespDataTypes>),
 
+    #[allow(dead_code)]
     SimpleError,
 }
 
@@ -121,6 +122,8 @@ pub enum Commands {
     Set(String, String, Option<Instant>),
 
     Get(String),
+
+    Config(Vec<String>),
 }
 
 impl TryFrom<RespDataTypes> for Commands {
@@ -135,7 +138,10 @@ impl TryFrom<RespDataTypes> for Commands {
 
                 if let Some(command_name) = command_name {
                     match command_name {
-                        RespDataTypes::BulkString(cmd_name) => match cmd_name.as_str() {
+                        RespDataTypes::BulkString(cmd_name) => match cmd_name
+                            .to_uppercase()
+                            .as_str()
+                        {
                             "ECHO" => {
                                 let mut key = String::new();
 
@@ -261,6 +267,36 @@ impl TryFrom<RespDataTypes> for Commands {
                                 }
 
                                 Ok(Self::Get(options[0].clone()))
+                            }
+
+                            "CONFIG" => {
+                                let mut options: Vec<String> = Vec::new();
+
+                                for i in 1..arr.len() {
+                                    let record_option = arr.get(i);
+
+                                    match record_option {
+                                        None => {
+                                            return Err(
+                                                "Config command must be fallowed by a subcommand",
+                                            );
+                                        }
+
+                                        Some(record) => match record {
+                                            RespDataTypes::BulkString(string) => {
+                                                options.push(string.to_owned());
+                                            }
+
+                                            RespDataTypes::Integer(int) => {
+                                                options.push(int.to_string());
+                                            }
+
+                                            _ => return Err("Invalid Config Command"),
+                                        },
+                                    }
+                                }
+
+                                Ok(Self::Config(options))
                             }
 
                             _ => Err("Invalid Command"),

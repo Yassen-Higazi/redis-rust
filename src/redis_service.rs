@@ -1,19 +1,21 @@
-use std::result;
+use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
-use std::{collections::HashMap, time::SystemTime};
+use std::time::Instant;
 
+use crate::configs::configurations::Configuration;
 use crate::resp::{Commands, RespDataTypes};
 
 use anyhow::bail;
 
 pub struct RedisService {
+    configs: Mutex<Configuration>,
     storage: Mutex<HashMap<String, (String, Option<Instant>)>>,
 }
 
 impl RedisService {
-    pub fn new() -> Self {
+    pub fn new(configs: Configuration) -> Self {
         Self {
+            configs: Mutex::new(configs),
             storage: Mutex::new(HashMap::new()),
         }
     }
@@ -86,6 +88,56 @@ impl RedisService {
 
                                     bail!("Internal Error")
                                 }
+                            }
+                        }
+
+                        Commands::Config(options) => {
+                            if let Some(subcommand) = options.first() {
+                                match subcommand.to_uppercase().as_str() {
+                                    "GET" => {
+                                        let mut res = Vec::new();
+
+                                        for i in 1..options.len() {
+                                            let attribute = options.get(i);
+
+                                            match attribute {
+                                                Some(attr) => {
+                                                    let configs = self.configs.lock().expect(
+                                                        "Could not acquire lock on configs",
+                                                    );
+
+                                                    if let Some(value) = configs.get(attr) {
+                                                        res.push(format!(
+                                                            "${}\r\n{}\r\n${}\r\n{}\r\n",
+                                                            attr.len(),
+                                                            attr,
+                                                            value.len(),
+                                                            value
+                                                        ));
+                                                    } else {
+                                                        bail!("No Config with name {attr}");
+                                                    };
+                                                }
+
+                                                None => bail!("Invalid Config command"),
+                                            }
+                                        }
+
+                                        let result = format!(
+                                            "*{}\r\n{}",
+                                            (options.len() - 1) * 2,
+                                            res.join("")
+                                        );
+
+                                        result.as_bytes().to_vec()
+                                    }
+
+                                    _ => {
+                                        bail!("Invalid Config command")
+                                    }
+                                }
+                            } else {
+                                bail!("Invalid Config command")
                             }
                         }
                     };

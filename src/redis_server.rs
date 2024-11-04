@@ -1,16 +1,20 @@
-use std::io::Read;
-
 use anyhow::Context;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::configs::configurations::Configuration;
 use crate::redis_service::RedisService;
 
-pub async fn listen() -> anyhow::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
+pub async fn listen(config: Configuration) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(config.get_address().as_str())
+        .await
+        .with_context(|| format!("Could not listen on {}", config.get_address()))
+        .unwrap();
 
-    let service = Arc::new(RedisService::new());
+    println!("Redis Server started listening on {}", config.get_address());
+
+    let service = Arc::new(RedisService::new(config));
 
     loop {
         let stream = listener.accept().await;
@@ -27,10 +31,11 @@ pub async fn listen() -> anyhow::Result<()> {
 
                         Err(err) => {
                             println!("Error: {:?}", err);
+
                             stream
                                 .write_all(format!("-{err}\r\n").as_bytes())
                                 .await
-                                .with_context(|| format!("Error: {err:?}"))
+                                .with_context(|| format!("Error writing error to socket: {err:?}"))
                                 .unwrap();
                         }
                     }
@@ -39,6 +44,7 @@ pub async fn listen() -> anyhow::Result<()> {
 
             Err(e) => {
                 println!("error: {e:?}");
+
                 break;
             }
         };
