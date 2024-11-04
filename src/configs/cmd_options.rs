@@ -5,7 +5,7 @@ pub struct CmdOptions {
     #[arg(short = 'd', long = "dir", default_value = "/tmp/redis-files")]
     pub dir: String,
 
-    #[arg(short = 'f', long = "filename", default_value = "dump.rdb")]
+    #[arg(short = 'f', long = "dbfilename", default_value = "dump.rdb")]
     pub filename: String,
 
     #[arg(short = 'h', long = "host", default_value = "127.0.0.1")]
