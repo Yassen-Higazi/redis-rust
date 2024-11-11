@@ -23,108 +23,103 @@ impl RedisService {
     pub async fn execute_command(&self, command: &str) -> anyhow::Result<Vec<u8>> {
         let command_vec = command.split("\r\n").collect::<Vec<&str>>();
 
-        let data = RespDataTypes::try_from(command_vec[..command_vec.len() - 1].to_vec());
+        let data_result = RespDataTypes::try_from(command_vec[..command_vec.len() - 1].to_vec());
 
-        if let Ok(data) = data {
-            let cmd = Commands::try_from(data);
+        let data = data_result.expect("Invalid command");
 
-            match cmd {
-                Ok(cmd) => {
-                    let response = match cmd {
-                        Commands::Ping => b"+PONG\r\n".to_vec(),
+        let cmd = Commands::try_from(data);
 
-                        Commands::Echo(message) => format!("+{message}\r\n").as_bytes().to_vec(),
+        match cmd {
+            Ok(cmd) => {
+                let response = match cmd {
+                    Commands::Ping => b"+PONG\r\n".to_vec(),
 
-                        Commands::Set(key, value, expiration) => {
-                            let mut storage_guard = self.storage.lock().await;
+                    Commands::Echo(message) => format!("+{message}\r\n").as_bytes().to_vec(),
 
-                            storage_guard.insert(key, (value.clone(), expiration));
+                    Commands::Set(key, value, expiration) => {
+                        let mut storage_guard = self.storage.lock().await;
 
-                            "+OK\r\n".as_bytes().to_vec()
-                        }
+                        storage_guard.insert(key, (value.clone(), expiration));
 
-                        Commands::Get(key) => {
-                            let mut storage_guard = self.storage.lock().await;
+                        "+OK\r\n".as_bytes().to_vec()
+                    }
 
-                            let value_opt = storage_guard.get(&key);
+                    Commands::Get(key) => {
+                        let mut storage_guard = self.storage.lock().await;
 
-                            let mut result = "$-1\r\n".as_bytes().to_vec();
+                        let value_opt = storage_guard.get(&key);
 
-                            if let Some((value, expiration)) = value_opt {
-                                let success = format!("${}\r\n{value}\r\n", value.len())
-                                    .as_bytes()
-                                    .to_vec();
+                        let mut result = "$-1\r\n".as_bytes().to_vec();
 
-                                if let Some(instant) = expiration {
-                                    if instant > &Instant::now() {
-                                        result = success;
-                                    } else {
-                                        storage_guard.remove(&key);
-                                    }
+                        if let Some((value, expiration)) = value_opt {
+                            let success = format!("${}\r\n{value}\r\n", value.len())
+                                .as_bytes()
+                                .to_vec();
+
+                            if let Some(instant) = expiration {
+                                if instant > &Instant::now() {
+                                    result = success;
                                 } else {
-                                    result = success
-                                }
-                            }
-
-                            result
-                        }
-
-                        Commands::Config(options) => {
-                            if let Some(subcommand) = options.first() {
-                                match subcommand.to_uppercase().as_str() {
-                                    "GET" => {
-                                        let mut res = Vec::new();
-
-                                        for i in 1..options.len() {
-                                            let attribute = options.get(i);
-
-                                            match attribute {
-                                                Some(attr) => {
-                                                    let configs = self.configs.lock().await;
-
-                                                    if let Some(value) = configs.get(attr) {
-                                                        res.push(format!(
-                                                            "${}\r\n{}\r\n${}\r\n{}\r\n",
-                                                            attr.len(),
-                                                            attr,
-                                                            value.len(),
-                                                            value
-                                                        ));
-                                                    } else {
-                                                        bail!("No Config with name {attr}");
-                                                    };
-                                                }
-
-                                                None => bail!("Invalid Config command"),
-                                            }
-                                        }
-
-                                        let result = format!(
-                                            "*{}\r\n{}",
-                                            (options.len() - 1) * 2,
-                                            res.join("")
-                                        );
-
-                                        result.as_bytes().to_vec()
-                                    }
-
-                                    _ => {
-                                        bail!("Invalid Config command")
-                                    }
+                                    storage_guard.remove(&key);
                                 }
                             } else {
-                                bail!("Invalid Config command")
+                                result = success
                             }
                         }
-                    };
 
-                    Ok(response)
-                }
+                        result
+                    }
 
-                Err(message) => bail!(message),
+                    Commands::Config(options) => {
+                        if let Some(subcommand) = options.first() {
+                            match subcommand.to_uppercase().as_str() {
+                                "GET" => {
+                                    let mut res = Vec::new();
+
+                                    for i in 1..options.len() {
+                                        let attribute = options.get(i);
+
+                                        match attribute {
+                                            Some(attr) => {
+                                                let configs = self.configs.lock().await;
+
+                                                if let Some(value) = configs.get(attr) {
+                                                    res.push(format!(
+                                                        "${}\r\n{}\r\n${}\r\n{}\r\n",
+                                                        attr.len(),
+                                                        attr,
+                                                        value.len(),
+                                                        value
+                                                    ));
+                                                } else {
+                                                    bail!("No Config with name {attr}");
+                                                };
+                                            }
+
+                                            None => bail!("Invalid Config command"),
+                                        }
+                                    }
+
+                                    let result =
+                                        format!("*{}\r\n{}", (options.len() - 1) * 2, res.join(""));
+
+                                    result.as_bytes().to_vec()
+                                }
+
+                                _ => {
+                                    bail!("Invalid Config command")
+                                }
+                            }
+                        } else {
+                            bail!("Invalid Config command")
+                        }
+                    }
+                };
+
+                Ok(response)
             }
-        } else {
-            bail!("Invalid Command");
+
+            Err(message) => bail!(message),
         }
     }
 }
