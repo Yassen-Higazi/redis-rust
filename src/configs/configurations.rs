@@ -1,6 +1,7 @@
+use std::path::PathBuf;
+
 use super::cmd_options::CmdOptions;
 
-#[derive(Debug)]
 pub struct Configuration {
     pub port: String,
 
@@ -14,6 +15,10 @@ pub struct Configuration {
 impl Configuration {
     pub fn get_address(&self) -> String {
         format!("{}:{}", self.host, self.port)
+    }
+
+    pub fn get_rdb_path(&self) -> PathBuf {
+        PathBuf::from(format!("{}/{}", self.dir, self.filename))
     }
 
     pub fn get(&self, attr: &str) -> Option<String> {
@@ -32,11 +37,11 @@ impl Configuration {
 }
 
 impl From<CmdOptions> for Configuration {
-    fn from(value: CmdOptions) -> Self {
+    fn from(value: CmdOptions) -> Configuration {
         Self {
+            dir: value.dir,
             port: value.port,
             host: value.host,
-            dir: value.dir,
             filename: value.filename,
         }
     }

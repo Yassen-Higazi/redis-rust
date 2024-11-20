@@ -3,6 +3,7 @@ use clap::Parser;
 use redis_server::listen;
 
 mod configs;
+mod persistence;
 mod redis_server;
 mod redis_service;
 mod resp;
@@ -14,8 +15,6 @@ async fn main() -> anyhow::Result<()> {
     let args = CmdOptions::parse();
 
     let configs = Configuration::from(args);
-
-    println!("Config: {configs:?}");
 
     listen(configs).await?;
 
