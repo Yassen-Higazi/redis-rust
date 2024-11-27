@@ -3,21 +3,34 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 
 use crate::configs::configurations::Configuration;
+use crate::persistence::persistence_interface::Persistent;
 use crate::resp::{Commands, RespDataTypes};
 
 use anyhow::bail;
 
 pub struct RedisService {
     configs: Mutex<Configuration>,
+    persistent_layer: Mutex<Box<dyn Persistent>>,
     storage: Mutex<HashMap<String, (String, Option<Instant>)>>,
 }
 
 impl RedisService {
-    pub fn new(configs: Configuration) -> Self {
-        Self {
+    pub async fn new(configs: Configuration, persistent_layer: Box<dyn Persistent>) -> Self {
+        let instance = Self {
             configs: Mutex::new(configs),
             storage: Mutex::new(HashMap::new()),
-        }
+            persistent_layer: Mutex::new(persistent_layer),
+        };
+
+        let mut layer = instance.persistent_layer.lock().await;
+
+        layer
+            .load()
+            .expect("Could not load data from persistent layer");
+
+        drop(layer);
+
+        instance
     }
 
     pub async fn execute_command(&self, command: &str) -> anyhow::Result<Vec<u8>> {
