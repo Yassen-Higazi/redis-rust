@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
@@ -23,11 +24,24 @@ pub enum OperationCode {
     Aux,
 }
 
-impl TryFrom<&[u8]> for OperationCode {
+impl Display for OperationCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OperationCode::Eof => write!(f, "EOF"),
+            OperationCode::Aux => write!(f, "AUX"),
+            OperationCode::SelectDb => write!(f, "SELECTDB"),
+            OperationCode::ResizeDb => write!(f, "RESIZE_DB"),
+            OperationCode::Expiretime => write!(f, "EXPIRETIME"),
+            OperationCode::ExpiretimeMs => write!(f, "EXPIRETIME_MS"),
+        }
+    }
+}
+
+impl TryFrom<&u8> for OperationCode {
     type Error = &'static str;
 
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        match value[0] {
+    fn try_from(value: &u8) -> Result<Self, Self::Error> {
+        match value {
             0xFF => Ok(OperationCode::Eof),
 
             0xFE => Ok(OperationCode::SelectDb),
@@ -61,115 +75,159 @@ impl RDB {
             reader: BufReader::new(file),
         })
     }
-
-    fn parse_length(&self, data: &[u8]) -> anyhow::Result<(usize, bool)> {
+    fn decode_length(&self, data: &[u8]) -> anyhow::Result<(usize, usize)> {
         let first_byte = data[0];
 
-        let mut is_string = false;
+        let mut next_byte_idex = 1usize;
 
-        let digit1 = (first_byte & 0b10000000) >> 7;
+        let bit1 = (first_byte & 0b10000000) >> 7;
 
-        let digit2 = (first_byte & 0b01000000) >> 6;
+        let bit2 = (first_byte & 0b01000000) >> 6;
 
-        let len = match (digit1, digit2) {
-            (0, 0) => {
-                dbg!("next 6 bits");
-
-                (first_byte & 0b00111111) as usize
-            }
+        let len = match (bit1, bit2) {
+            (0, 0) | (1, 1) => (first_byte & 0b00111111) as usize,
 
             (0, 1) => {
                 dbg!("next 14 bits");
 
                 let byte1 = (first_byte & 0b00111111) as u16;
                 let byte2 = data[1] as u16;
+                next_byte_idex += 1;
 
                 ((byte1 << 8) | byte2) as usize
             }
 
             (1, 0) => {
                 dbg!("next 4 bytes");
+                next_byte_idex += 3;
 
                 u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize
             }
 
-            (1, 1) => {
-                dbg!("next 6 bits with special format");
+            _ => todo!(),
+        };
 
-                is_string = true;
+        Ok((len, next_byte_idex))
+    }
 
-                let len = first_byte & 0b00111111;
+    fn decode_string(&self, data: &[u8]) -> anyhow::Result<(String, usize)> {
+        let (len, next_byte_idx) = self.decode_length(data)?;
 
-                len as usize
+        let mut last_idx = next_byte_idx;
+
+        ensure!(last_idx <= data.len(), "Invalid length");
+
+        dbg!(len);
+
+        match len {
+            // 8 bit unsigned integer as string
+            0 => {
+                let num = u8::from_le_bytes([data[next_byte_idx]]);
+
+                last_idx += 1;
+
+                Ok((num.to_string(), last_idx))
             }
 
-            _ => bail!("Invalid length Encoding"),
-        };
+            // 16 bit unsigned integer as string
+            1 => {
+                let num = u16::from_le_bytes([data[next_byte_idx], data[next_byte_idx + 1]]);
 
-        Ok((len, is_string))
-    }
+                last_idx += 2;
 
-    fn parse_string(&self, data: &[u8]) -> anyhow::Result<(String, usize)> {
-        let (len, _) = self.parse_length(data)?;
+                Ok((num.to_string(), last_idx))
+            }
 
-        dbg!(len, [data[len], data[len + 1]]);
+            // 32 bit unsigned integer as string
+            2 => {
+                let num = u32::from_le_bytes([
+                    data[next_byte_idx],
+                    data[next_byte_idx + 1],
+                    data[next_byte_idx + 2],
+                    data[next_byte_idx + 3],
+                ]);
 
-        let string = match len {
-            0 => String::from_utf8(vec![data[len + 1]])?,
+                last_idx += 4;
 
-            1 => todo!(),
+                Ok((num.to_string(), last_idx))
+            }
 
-            2 => todo!(),
-
+            // Compressed String
             3 => todo!(),
 
-            _ => String::from_utf8(data[1..len + 1].to_vec())?,
-        };
+            // Length Prefixed String
+            _ => {
+                last_idx += len;
 
-        Ok((string, len))
+                ensure!(last_idx <= data.len(), "Invalid length");
+
+                Ok((
+                    String::from_utf8(data[next_byte_idx..last_idx].to_vec())?,
+                    last_idx,
+                ))
+            }
+        }
     }
 
-    fn parse_file_header(&self, data: &[u8]) -> anyhow::Result<()> {
+    fn parse_file(&self, data: &[u8]) -> anyhow::Result<()> {
         let mut current_idx = 0;
 
-        let op_code = format!("{:X}", data[current_idx]);
+        let op_code = OperationCode::try_from(&data[current_idx]);
 
         dbg!(&op_code);
 
-        ensure!(op_code == "FA", "Invalid RDB file header");
-
-        current_idx += 1;
-
         let mut headers = HashMap::<String, String>::new();
 
-        loop {
-            let (ver_key_string, ver_key_len) = self
-                .parse_string(&data[current_idx..])
-                .with_context(|| format!("Could not parse header string in {op_code} section"))?;
+        match op_code {
+            Ok(op_code) => {
+                current_idx += 1;
 
-            dbg!(&ver_key_string);
+                match op_code {
+                    OperationCode::Aux => loop {
+                        let (key_string, key_next_idx) =
+                            self.decode_string(&data[current_idx..]).with_context(|| {
+                                format!("Could not parse header string in {op_code} section")
+                            })?;
 
-            current_idx += ver_key_len;
+                        dbg!(&key_string);
 
-            let (ver_value_string, ver_value_len) = self
-                .parse_string(&data[current_idx..])
-                .with_context(|| format!("Could not parse header string in {op_code} section"))?;
+                        current_idx += key_next_idx;
 
-            dbg!(&ver_value_string);
+                        let (value_string, value_next_idx) =
+                            self.decode_string(&data[current_idx..]).with_context(|| {
+                                format!("Could not parse header string in {op_code} section")
+                            })?;
 
-            current_idx += ver_value_len;
+                        dbg!(&value_string);
 
-            headers.insert(ver_key_string, ver_value_string);
+                        headers.insert(key_string, value_string);
 
-            let op_code = OperationCode::try_from(&data[current_idx..]);
+                        current_idx += value_next_idx;
 
-            current_idx += 1;
+                        let op_code_res = OperationCode::try_from(&data[current_idx]);
 
-            dbg!(&op_code);
+                        dbg!(&op_code_res);
 
-            if !op_code.is_ok_and(|code| code == OperationCode::Aux) {
-                break;
+                        if let Ok(code) = op_code_res {
+                            if code != OperationCode::Aux {
+                                break;
+                            }
+                        } else {
+                            bail!("Invalid operation code");
+                        }
+
+                        current_idx += 1;
+                    },
+
+                    OperationCode::Eof => {
+                        println!("EOF: {current_idx}");
+                    }
+
+                    _ => todo!(),
+                }
             }
+
+            Err(_) => bail!("Invalid operation code in header"),
         }
 
         Ok(())
@@ -189,13 +247,13 @@ impl Persistent for RDB {
             .read_to_end(&mut data)
             .with_context(|| "Could not read rdb file")?;
 
-        dbg!(bytes_read);
+        ensure!(bytes_read > 0, "Empty rdb file");
 
         let magic_string = String::from_utf8(data[0..9].to_vec())?;
 
         ensure!(&magic_string[0..5] == "REDIS", "Invalid rdb file");
 
-        self.parse_file_header(&data[9..])
+        self.parse_file(&data[9..])
             .with_context(|| "Could not parse rdb file header")?;
 
         Ok(())
