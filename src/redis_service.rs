@@ -1,36 +1,42 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::configs::configurations::Configuration;
+use crate::database::Database;
 use crate::persistence::persistence_interface::Persistent;
 use crate::resp::{Commands, RespDataTypes};
 
 use anyhow::bail;
 
 pub struct RedisService {
+    selected_db: u32,
     configs: Mutex<Configuration>,
-    persistent_layer: Mutex<Box<dyn Persistent>>,
-    storage: Mutex<HashMap<String, (String, Option<Instant>)>>,
+    databases: RwLock<HashMap<u32, Arc<Database>>>,
 }
 
 impl RedisService {
-    pub async fn new(configs: Configuration, persistent_layer: Box<dyn Persistent>) -> Self {
-        let instance = Self {
-            configs: Mutex::new(configs),
-            storage: Mutex::new(HashMap::new()),
-            persistent_layer: Mutex::new(persistent_layer),
-        };
-
-        let mut layer = instance.persistent_layer.lock().await;
-
-        layer
+    pub async fn new(configs: Configuration, mut persistent_layer: Box<dyn Persistent>) -> Self {
+        let databases = persistent_layer
             .load()
             .expect("Could not load data from persistent layer");
 
-        drop(layer);
+        Self {
+            selected_db: 0,
+            configs: Mutex::new(configs),
+            databases: RwLock::new(databases),
+        }
+    }
 
-        instance
+    async fn get_selected_db(&self) -> Arc<Database> {
+        return self
+            .databases
+            .read()
+            .await
+            .get(&self.selected_db)
+            .expect("No DB found")
+            .clone();
     }
 
     pub async fn execute_command(&self, command: &str) -> anyhow::Result<Vec<u8>> {
@@ -50,17 +56,17 @@ impl RedisService {
                     Commands::Echo(message) => format!("+{message}\r\n").as_bytes().to_vec(),
 
                     Commands::Set(key, value, expiration) => {
-                        let mut storage_guard = self.storage.lock().await;
+                        let db = self.get_selected_db().await;
 
-                        storage_guard.insert(key, (value.clone(), expiration));
+                        db.insert(key, value.clone(), expiration).await;
 
                         "+OK\r\n".as_bytes().to_vec()
                     }
 
                     Commands::Get(key) => {
-                        let mut storage_guard = self.storage.lock().await;
+                        let db = self.get_selected_db().await;
 
-                        let value_opt = storage_guard.get(&key);
+                        let value_opt = db.get(&key).await;
 
                         let mut result = "$-1\r\n".as_bytes().to_vec();
 
@@ -70,10 +76,10 @@ impl RedisService {
                                 .to_vec();
 
                             if let Some(instant) = expiration {
-                                if instant > &Instant::now() {
+                                if instant > Instant::now() {
                                     result = success;
                                 } else {
-                                    storage_guard.remove(&key);
+                                    db.remove(&key).await;
                                 }
                             } else {
                                 result = success

@@ -3,6 +3,7 @@ use clap::Parser;
 use redis_server::listen;
 
 mod configs;
+mod database;
 mod persistence;
 mod redis_server;
 mod redis_service;

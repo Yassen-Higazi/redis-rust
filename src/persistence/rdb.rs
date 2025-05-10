@@ -3,6 +3,9 @@ use std::fmt::Display;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use crate::database::Database;
 
 use anyhow::{bail, ensure, Context};
 
@@ -167,14 +170,18 @@ impl RDB {
         }
     }
 
-    fn parse_file(&self, data: &[u8]) -> anyhow::Result<()> {
+    fn parse_file(&self, data: &[u8]) -> anyhow::Result<HashMap<u32, Arc<Database>>> {
         let mut current_idx = 0;
 
         let mut op_code = OperationCode::try_from(&data[current_idx]);
 
         let mut headers = HashMap::<String, String>::new();
 
+        let mut databases = HashMap::<u32, Arc<Database>>::new();
+
         let mut selected_db = 0u32;
+
+        databases.insert(0, Arc::new(Database::new(selected_db)));
 
         loop {
             match &op_code {
@@ -224,6 +231,8 @@ impl RDB {
 
                         println!("DB: {selected_db}, current_idx: {current_idx}");
 
+                        databases.insert(selected_db, Arc::new(Database::new(selected_db)));
+
                         break;
                     }
 
@@ -239,7 +248,7 @@ impl RDB {
             }
         }
 
-        Ok(())
+        Ok(databases)
     }
 }
 
@@ -248,7 +257,7 @@ impl Persistent for RDB {
         todo!()
     }
 
-    fn load(&mut self) -> anyhow::Result<()> {
+    fn load(&mut self) -> anyhow::Result<HashMap<u32, Arc<Database>>> {
         let mut data = Vec::new();
 
         let bytes_read = self
@@ -262,9 +271,10 @@ impl Persistent for RDB {
 
         ensure!(&magic_string[0..5] == "REDIS", "Invalid rdb file");
 
-        self.parse_file(&data[9..])
+        let databases = self
+            .parse_file(&data[9..])
             .with_context(|| "Could not parse rdb file header")?;
 
-        Ok(())
+        Ok(databases)
     }
 }
