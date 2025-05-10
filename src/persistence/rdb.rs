@@ -4,6 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::database::Database;
 
@@ -11,9 +12,62 @@ use anyhow::{bail, ensure, Context};
 
 use super::persistence_interface::Persistent;
 
+#[derive(Debug)]
+enum KeyType {
+    String,
+    List,
+    Set,
+    SortedSet,
+    Hash,
+    Zipmap,
+    Ziplist,
+    Intset,
+    ZHashMap,
+    ZSortedSet,
+    ListQuickList,
+}
+
+impl Display for KeyType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeyType::String => write!(f, "String"),
+            KeyType::List => write!(f, "List"),
+            KeyType::Set => write!(f, "Set"),
+            KeyType::SortedSet => write!(f, "SortedSet"),
+            KeyType::Hash => write!(f, "Hash"),
+            KeyType::Zipmap => write!(f, "Zipmap"),
+            KeyType::Ziplist => write!(f, "Ziplist"),
+            KeyType::Intset => write!(f, "Intset"),
+            KeyType::ZHashMap => write!(f, "ZHashMap"),
+            KeyType::ZSortedSet => write!(f, "ZSortedSet"),
+            KeyType::ListQuickList => write!(f, "ListQuickList"),
+        }
+    }
+}
+
+impl From<u8> for KeyType {
+    fn from(value: u8) -> Self {
+        match value {
+            0x00 => KeyType::String,
+            0x01 => KeyType::List,
+            0x02 => KeyType::Set,
+            0x03 => KeyType::SortedSet,
+            0x04 => KeyType::Hash,
+            0x09 => KeyType::Zipmap,
+            0x0A => KeyType::Ziplist,
+            0x0B => KeyType::Intset,
+            0x0C => KeyType::ZSortedSet,
+            0x0D => KeyType::ZHashMap,
+            0x0E => KeyType::ListQuickList,
+
+            _ => panic!("Invalid key type"),
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(PartialEq, Eq, Debug)]
-pub enum OperationCode {
+enum OperationCode {
     Eof,
 
     SelectDb,
@@ -51,7 +105,9 @@ impl TryFrom<&u8> for OperationCode {
 
             0xFD => Ok(OperationCode::Expiretime),
 
-            0xFB => Ok(OperationCode::ExpiretimeMs),
+            0xFC => Ok(OperationCode::ExpiretimeMs),
+
+            0xFB => Ok(OperationCode::ResizeDb),
 
             0xFA => Ok(OperationCode::Aux),
 
@@ -78,47 +134,47 @@ impl RDB {
             reader: BufReader::new(file),
         })
     }
+
     fn decode_length(&self, data: &[u8]) -> anyhow::Result<(usize, usize)> {
         let first_byte = data[0];
 
-        let mut next_byte_idex = 1usize;
+        let mut next_byte_idx = 1usize;
 
         let bit1 = (first_byte & 0b10000000) >> 7;
 
         let bit2 = (first_byte & 0b01000000) >> 6;
 
         let len = match (bit1, bit2) {
-            (0, 0) | (1, 1) => (first_byte & 0b00111111) as usize,
-
             (0, 1) => {
-                dbg!("next 14 bits");
-
-                let byte1 = (first_byte & 0b00111111) as u16;
-                let byte2 = data[1] as u16;
-                next_byte_idex += 1;
+                let byte1 = (first_byte & 0x3F) as u16;
+                let byte2 = data[next_byte_idx] as u16;
+                next_byte_idx += 1;
 
                 ((byte1 << 8) | byte2) as usize
             }
 
             (1, 0) => {
-                dbg!("next 4 bytes");
-                next_byte_idex += 3;
+                next_byte_idx += 4;
 
-                u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize
+                u32::from_be_bytes([
+                    data[next_byte_idx],
+                    data[next_byte_idx + 1],
+                    data[next_byte_idx + 2],
+                    data[next_byte_idx + 3],
+                ]) as usize
             }
 
-            _ => todo!(),
+            // handle (0, 0) and (1, 1)
+            _ => (first_byte & 0b00111111) as usize,
         };
 
-        Ok((len, next_byte_idex))
+        Ok((len, next_byte_idx))
     }
 
     fn decode_string(&self, data: &[u8]) -> anyhow::Result<(String, usize)> {
         let (len, next_byte_idx) = self.decode_length(data)?;
 
         let mut last_idx = next_byte_idx;
-
-        ensure!(last_idx <= data.len(), "Invalid length");
 
         match len {
             // 8 bit unsigned integer as string
@@ -170,25 +226,119 @@ impl RDB {
         }
     }
 
-    fn parse_file(&self, data: &[u8]) -> anyhow::Result<HashMap<u32, Arc<Database>>> {
-        let mut current_idx = 0;
+    fn decode_expiration_time(&self, data: &[u8]) -> anyhow::Result<Option<(Instant, u8)>> {
+        let first_byte = data[0];
 
-        let mut op_code = OperationCode::try_from(&data[current_idx]);
+        println!("first_byte: {first_byte:X}");
+
+        match first_byte {
+            // Timestampe in secends
+            0xFD => {
+                todo!()
+            }
+
+            // Timestampe in miliseconds
+            0xFC => {
+                todo!()
+            }
+
+            _ => Ok(None),
+        }
+    }
+
+    fn decode_key_value(
+        &self,
+        data: &[u8],
+        key_type: &KeyType,
+    ) -> anyhow::Result<(Vec<u8>, usize)> {
+        match key_type {
+            KeyType::String => {
+                let (key, next_idx) = self
+                    .decode_string(data)
+                    .with_context(|| "Could not parse key value for Type String")?;
+
+                println!("key: {key}, next_idx: {next_idx}");
+
+                Ok((key.as_bytes().to_vec(), next_idx))
+            }
+
+            KeyType::List => todo!(),
+
+            KeyType::Set => todo!(),
+
+            KeyType::SortedSet => todo!(),
+
+            KeyType::Hash => todo!(),
+
+            KeyType::Zipmap => todo!(),
+
+            KeyType::Ziplist => todo!(),
+
+            KeyType::Intset => todo!(),
+
+            KeyType::ZHashMap => todo!(),
+
+            KeyType::ZSortedSet => todo!(),
+
+            KeyType::ListQuickList => todo!(),
+        }
+    }
+
+    fn decode_key(
+        &self,
+        data: &[u8],
+        mut current_idx: usize,
+    ) -> anyhow::Result<(String, Vec<u8>, KeyType, Option<Instant>, usize)> {
+        let exp_res = self
+            .decode_expiration_time(&data[current_idx..])
+            .with_context(|| "Could not parse value")?;
+
+        let mut key_expiration: Option<Instant> = None;
+
+        if let Some((expiration, size)) = exp_res {
+            println!("Expiration time: {:?}", exp_res.unwrap());
+
+            key_expiration = Some(expiration);
+
+            current_idx += size as usize;
+        }
+
+        let key_type = KeyType::try_from(data[current_idx])?;
+
+        current_idx += 1;
+
+        let (key_name, next_idx) = self
+            .decode_string(&data[current_idx..])
+            .with_context(|| "Could not parse key name")?;
+
+        current_idx += next_idx;
+
+        let (key_value, next_idx) = self.decode_key_value(&data[current_idx..], &key_type)?;
+
+        current_idx += next_idx;
+
+        Ok((key_name, key_value, key_type, key_expiration, current_idx))
+    }
+
+    async fn parse_file(&self, data: &[u8]) -> anyhow::Result<HashMap<u32, Arc<Database>>> {
+        let mut current_idx = 0;
 
         let mut headers = HashMap::<String, String>::new();
 
         let mut databases = HashMap::<u32, Arc<Database>>::new();
 
-        let mut selected_db = 0u32;
-
-        databases.insert(0, Arc::new(Database::new(selected_db)));
+        let mut selected_db: u32 = 0;
+        let mut db_hashmap_size: u32;
+        let mut expiration_hashmap_size: u32;
 
         loop {
+            let op_code = OperationCode::try_from(&data[current_idx]);
+
+            current_idx += 1;
+
             match &op_code {
                 Ok(code) => match code {
                     OperationCode::Aux => {
-                        current_idx += 1;
-
                         let (key_string, key_next_idx) =
                             self.decode_string(&data[current_idx..]).with_context(|| {
                                 format!("Could not parse header string in {code} section")
@@ -204,47 +354,83 @@ impl RDB {
                         headers.insert(key_string, value_string);
 
                         current_idx += value_next_idx;
-
-                        let op_code_res = OperationCode::try_from(&data[current_idx]);
-
-                        if op_code_res.is_ok() {
-                            op_code = op_code_res;
-
-                            continue;
-                        } else {
-                            bail!("Invalid operation code in header");
-                        }
                     }
 
                     OperationCode::SelectDb => {
-                        println!("SELECTDB");
-                        current_idx += 1;
-
-                        let (value_string, value_next_idx) =
-                            self.decode_string(&data[current_idx..]).with_context(|| {
+                        let (value, next_idx) =
+                            self.decode_length(&data[current_idx..]).with_context(|| {
                                 format!("Could not parse header string in {code} section")
                             })?;
 
-                        current_idx += value_next_idx;
+                        current_idx += next_idx;
 
-                        selected_db = value_string.parse::<u32>()?;
-
-                        println!("DB: {selected_db}, current_idx: {current_idx}");
+                        selected_db = value as u32;
 
                         databases.insert(selected_db, Arc::new(Database::new(selected_db)));
+                    }
 
-                        break;
+                    OperationCode::ResizeDb => {
+                        println!("RESIZE_DB");
+
+                        let (db_size, next_idx) = self
+                            .decode_length(&data[current_idx..])
+                            .with_context(|| format!("Could not parse value in {code} section"))?;
+
+                        db_hashmap_size = db_size as u32;
+
+                        current_idx += next_idx;
+
+                        let (expiration_size, next_idx) = self
+                            .decode_length(&data[current_idx..])
+                            .with_context(|| format!("Could not parse value in {code} section"))?;
+
+                        current_idx += next_idx;
+
+                        expiration_hashmap_size = expiration_size as u32;
+
+                        println!("db_size: {db_hashmap_size}, expiration_size: {expiration_hashmap_size}");
+
+                        loop {
+                            let (name, value, _, expiration, next_idx) =
+                                self.decode_key(data, current_idx).with_context(|| {
+                                    format!("Could not parse key in {code} section")
+                                })?;
+
+                            databases
+                                .get_mut(&selected_db)
+                                .with_context(|| format!("Could not find database {selected_db}"))?
+                                .insert(name, String::from_utf8(value)?, expiration)
+                                .await;
+
+                            current_idx = next_idx;
+
+                            if let Ok(code) = OperationCode::try_from(&data[current_idx]) {
+                                if code == OperationCode::Eof {
+                                    break;
+                                }
+                            } else {
+                                continue;
+                            }
+                        }
+                    }
+
+                    OperationCode::Expiretime => {
+                        println!("EXPIRETIME");
+                        self.decode_expiration_time(&data[current_idx..])?;
+                    }
+
+                    OperationCode::ExpiretimeMs => {
+                        println!("EXPIRETIME_MS");
+                        self.decode_expiration_time(&data[current_idx..])?;
                     }
 
                     OperationCode::Eof => {
                         println!("EOF: {current_idx}");
                         break;
                     }
-
-                    _ => todo!(),
                 },
 
-                Err(_) => bail!("Invalid operation code in header"),
+                Err(_) => bail!("Invalid operation code"),
             }
         }
 
@@ -271,9 +457,9 @@ impl Persistent for RDB {
 
         ensure!(&magic_string[0..5] == "REDIS", "Invalid rdb file");
 
-        let databases = self
-            .parse_file(&data[9..])
-            .with_context(|| "Could not parse rdb file header")?;
+        let future = self.parse_file(&data[9..]);
+
+        let databases = futures::executor::block_on(future)?;
 
         Ok(databases)
     }

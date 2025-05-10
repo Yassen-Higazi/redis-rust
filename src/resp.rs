@@ -124,6 +124,8 @@ pub enum Commands {
     Get(String),
 
     Config(Vec<String>),
+
+    Keys(String),
 }
 
 impl TryFrom<RespDataTypes> for Commands {
@@ -267,6 +269,38 @@ impl TryFrom<RespDataTypes> for Commands {
                                 }
 
                                 Ok(Self::Get(options[0].clone()))
+                            }
+
+                            "KEYS" => {
+                                let mut options = Vec::new();
+
+                                for i in 1..arr.len() {
+                                    let record_option = arr.get(i);
+
+                                    match record_option {
+                                        None => {
+                                            return Err("KEYS command must be followed by a key");
+                                        }
+
+                                        Some(record) => match record {
+                                            RespDataTypes::BulkString(string) => {
+                                                options.push(string.to_owned());
+                                            }
+
+                                            RespDataTypes::Integer(int) => {
+                                                options.push(int.to_string());
+                                            }
+
+                                            _ => {
+                                                return Err(
+                                                    "KEYS command must be fallowed by a key",
+                                                )
+                                            }
+                                        },
+                                    }
+                                }
+
+                                Ok(Self::Keys(options[0].clone()))
                             }
 
                             "CONFIG" => {

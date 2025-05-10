@@ -89,6 +89,8 @@ impl RedisService {
                         result
                     }
 
+                    Commands::Keys(_) => todo!(),
+
                     Commands::Config(options) => {
                         if let Some(subcommand) = options.first() {
                             match subcommand.to_uppercase().as_str() {
