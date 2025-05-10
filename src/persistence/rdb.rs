@@ -117,8 +117,6 @@ impl RDB {
 
         ensure!(last_idx <= data.len(), "Invalid length");
 
-        dbg!(len);
-
         match len {
             // 8 bit unsigned integer as string
             0 => {
@@ -172,33 +170,29 @@ impl RDB {
     fn parse_file(&self, data: &[u8]) -> anyhow::Result<()> {
         let mut current_idx = 0;
 
-        let op_code = OperationCode::try_from(&data[current_idx]);
-
-        dbg!(&op_code);
+        let mut op_code = OperationCode::try_from(&data[current_idx]);
 
         let mut headers = HashMap::<String, String>::new();
 
-        match op_code {
-            Ok(op_code) => {
-                current_idx += 1;
+        let mut selected_db = 0u32;
 
-                match op_code {
-                    OperationCode::Aux => loop {
+        loop {
+            match &op_code {
+                Ok(code) => match code {
+                    OperationCode::Aux => {
+                        current_idx += 1;
+
                         let (key_string, key_next_idx) =
                             self.decode_string(&data[current_idx..]).with_context(|| {
-                                format!("Could not parse header string in {op_code} section")
+                                format!("Could not parse header string in {code} section")
                             })?;
-
-                        dbg!(&key_string);
 
                         current_idx += key_next_idx;
 
                         let (value_string, value_next_idx) =
                             self.decode_string(&data[current_idx..]).with_context(|| {
-                                format!("Could not parse header string in {op_code} section")
+                                format!("Could not parse header string in {code} section")
                             })?;
-
-                        dbg!(&value_string);
 
                         headers.insert(key_string, value_string);
 
@@ -206,28 +200,43 @@ impl RDB {
 
                         let op_code_res = OperationCode::try_from(&data[current_idx]);
 
-                        dbg!(&op_code_res);
+                        if op_code_res.is_ok() {
+                            op_code = op_code_res;
 
-                        if let Ok(code) = op_code_res {
-                            if code != OperationCode::Aux {
-                                break;
-                            }
+                            continue;
                         } else {
-                            bail!("Invalid operation code");
+                            bail!("Invalid operation code in header");
                         }
+                    }
 
+                    OperationCode::SelectDb => {
+                        println!("SELECTDB");
                         current_idx += 1;
-                    },
+
+                        let (value_string, value_next_idx) =
+                            self.decode_string(&data[current_idx..]).with_context(|| {
+                                format!("Could not parse header string in {code} section")
+                            })?;
+
+                        current_idx += value_next_idx;
+
+                        selected_db = value_string.parse::<u32>()?;
+
+                        println!("DB: {selected_db}, current_idx: {current_idx}");
+
+                        break;
+                    }
 
                     OperationCode::Eof => {
                         println!("EOF: {current_idx}");
+                        break;
                     }
 
                     _ => todo!(),
-                }
-            }
+                },
 
-            Err(_) => bail!("Invalid operation code in header"),
+                Err(_) => bail!("Invalid operation code in header"),
+            }
         }
 
         Ok(())
