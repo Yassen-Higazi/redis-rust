@@ -85,11 +85,23 @@ impl RedisService {
                                 result = success
                             }
                         }
-
                         result
                     }
 
-                    Commands::Keys(_) => todo!(),
+                    Commands::Keys(key) => {
+                        let db = self.get_selected_db().await;
+
+                        let result_vec = if key == "*" {
+                            db.keys().await
+                        } else {
+                            db.keys_from_pattren(&key).await
+                        };
+
+                        RespDataTypes::from(result_vec)
+                            .to_string()
+                            .as_bytes()
+                            .to_vec()
+                    }
 
                     Commands::Config(options) => {
                         if let Some(subcommand) = options.first() {
@@ -105,13 +117,8 @@ impl RedisService {
                                                 let configs = self.configs.lock().await;
 
                                                 if let Some(value) = configs.get(attr) {
-                                                    res.push(format!(
-                                                        "${}\r\n{}\r\n${}\r\n{}\r\n",
-                                                        attr.len(),
-                                                        attr,
-                                                        value.len(),
-                                                        value
-                                                    ));
+                                                    res.push(attr.to_owned());
+                                                    res.push(value);
                                                 } else {
                                                     bail!("No Config with name {attr}");
                                                 };
@@ -121,10 +128,7 @@ impl RedisService {
                                         }
                                     }
 
-                                    let result =
-                                        format!("*{}\r\n{}", (options.len() - 1) * 2, res.join(""));
-
-                                    result.as_bytes().to_vec()
+                                    RespDataTypes::from(res).to_string().as_bytes().to_vec()
                                 }
 
                                 _ => {

@@ -1,3 +1,4 @@
+use regex::Regex;
 use std::{collections::HashMap, time::Instant};
 use tokio::sync::Mutex;
 
@@ -10,7 +11,7 @@ pub struct Database {
 
 impl Database {
     pub fn new(id: u32) -> Self {
-        println!("Creating new database with id: {}", id);
+        println!("Creating new database with id: {id}");
 
         Database {
             id,
@@ -34,5 +35,23 @@ impl Database {
         let mut hashmap = self.data_hashmap.lock().await;
 
         hashmap.insert(key, (value, expire_time));
+    }
+
+    pub async fn keys(&self) -> Vec<String> {
+        let hashmap = self.data_hashmap.lock().await;
+
+        hashmap.keys().cloned().collect()
+    }
+
+    pub async fn keys_from_pattren(&self, pattern: &str) -> Vec<String> {
+        let hashmap = self.data_hashmap.lock().await;
+
+        let re = Regex::new(pattern).expect("Invalid regex pattern");
+
+        hashmap
+            .keys()
+            .filter(|key| re.is_match(key))
+            .cloned()
+            .collect()
     }
 }
