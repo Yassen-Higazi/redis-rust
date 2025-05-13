@@ -8,7 +8,7 @@ pub struct CmdOptions {
     #[arg(short = 'f', long = "dbfilename", default_value = "dump.rdb")]
     pub filename: String,
 
-    #[arg(short = 'h', long = "host", default_value = "127.0.0.1")]
+    #[arg(short = 'u', long = "host", default_value = "127.0.0.1")]
     pub host: String,
 
     #[arg(short = 'p', long = "port", default_value = "6379")]

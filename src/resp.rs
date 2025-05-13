@@ -1,5 +1,8 @@
 use regex::Regex;
-use std::time::{Duration, Instant};
+use std::{
+    fmt::Display,
+    time::{Duration, Instant},
+};
 
 #[derive(Debug, Clone)]
 pub enum RespDataTypes {
@@ -24,6 +27,54 @@ impl RespDataTypes {
             Self::BulkString(_) => 2,
 
             _ => 1,
+        }
+    }
+}
+
+impl Display for RespDataTypes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SimpleString(value) => write!(f, "+{value}\r\n"),
+
+            Self::Integer(value) => write!(f, ":{}\r\n", value),
+
+            Self::BulkString(value) => write!(f, "${}\r\n{}\r\n", value.len(), value),
+
+            Self::Array(arr) => {
+                let mut result = String::new();
+
+                for item in arr {
+                    result.push_str(&item.to_string());
+                }
+
+                write!(f, "*{}\r\n{}", arr.len(), result)
+            }
+
+            _ => write!(f, "Invalid Type"),
+        }
+    }
+}
+
+impl From<Vec<String>> for RespDataTypes {
+    fn from(value: Vec<String>) -> Self {
+        let mut columns: Vec<RespDataTypes> = Vec::with_capacity(value.len());
+
+        for item in value {
+            columns.push(RespDataTypes::from(item));
+        }
+
+        Self::Array(columns)
+    }
+}
+
+impl From<String> for RespDataTypes {
+    fn from(value: String) -> Self {
+        let result = value.parse::<f64>();
+
+        match result {
+            Ok(num) => Self::Integer(num as i64),
+
+            Err(_) => Self::BulkString(value),
         }
     }
 }
@@ -124,6 +175,8 @@ pub enum Commands {
     Get(String),
 
     Config(Vec<String>),
+
+    Keys(String),
 }
 
 impl TryFrom<RespDataTypes> for Commands {
@@ -267,6 +320,42 @@ impl TryFrom<RespDataTypes> for Commands {
                                 }
 
                                 Ok(Self::Get(options[0].clone()))
+                            }
+
+                            "KEYS" => {
+                                let mut options = Vec::new();
+
+                                if arr.len() < 2 {
+                                    return Err("KEYS command must be followed by a key");
+                                }
+
+                                for i in 1..arr.len() {
+                                    let record_option = arr.get(i);
+
+                                    match record_option {
+                                        None => {
+                                            return Err("KEYS command must be followed by a key");
+                                        }
+
+                                        Some(record) => match record {
+                                            RespDataTypes::BulkString(string) => {
+                                                options.push(string.to_owned());
+                                            }
+
+                                            RespDataTypes::Integer(int) => {
+                                                options.push(int.to_string());
+                                            }
+
+                                            _ => {
+                                                return Err(
+                                                    "KEYS command must be fallowed by a key",
+                                                )
+                                            }
+                                        },
+                                    }
+                                }
+
+                                Ok(Self::Keys(options[0].clone()))
                             }
 
                             "CONFIG" => {

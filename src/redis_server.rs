@@ -4,17 +4,22 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::configs::configurations::Configuration;
+use crate::persistence::rdb::RDB;
 use crate::redis_service::RedisService;
 
 pub async fn listen(config: Configuration) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(config.get_address().as_str())
+    let address = config.get_address();
+
+    let rdb = RDB::new(&config.get_rdb_path())?;
+
+    let service = Arc::new(RedisService::new(config, Box::new(rdb)).await);
+
+    let listener = TcpListener::bind(address.as_str())
         .await
-        .with_context(|| format!("Could not listen on {}", config.get_address()))
+        .with_context(|| format!("Could not listen on {}", address))
         .unwrap();
 
-    println!("Redis Server started listening on {}", config.get_address());
-
-    let service = Arc::new(RedisService::new(config));
+    println!("Redis Server started listening on {}", address);
 
     loop {
         let stream = listener.accept().await;
