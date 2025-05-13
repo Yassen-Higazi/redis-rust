@@ -118,7 +118,7 @@ impl TryFrom<&u8> for OperationCode {
 
 #[allow(dead_code, clippy::upper_case_acronyms)]
 pub struct RDB {
-    reader: BufReader<File>,
+    reader: Option<BufReader<File>>,
 }
 
 impl RDB {
@@ -128,10 +128,20 @@ impl RDB {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(file_path)?;
+            .open(file_path);
+
+        let buff_option = match file {
+            Ok(file) => Some(BufReader::new(file)),
+
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::NotFound => None,
+
+                _ => bail!("Could not open file: {}", e),
+            },
+        };
 
         Ok(Self {
-            reader: BufReader::new(file),
+            reader: buff_option,
         })
     }
 
@@ -229,8 +239,6 @@ impl RDB {
     fn decode_expiration_time(&self, data: &[u8]) -> anyhow::Result<Option<(Instant, u8)>> {
         let first_byte = data[0];
 
-        println!("first_byte: {first_byte:X}");
-
         match first_byte {
             // Timestampe in secends
             0xFD => {
@@ -256,8 +264,6 @@ impl RDB {
                 let (key, next_idx) = self
                     .decode_string(data)
                     .with_context(|| "Could not parse key value for Type String")?;
-
-                println!("key: {key}, next_idx: {next_idx}");
 
                 Ok((key.as_bytes().to_vec(), next_idx))
             }
@@ -296,14 +302,12 @@ impl RDB {
         let mut key_expiration: Option<Instant> = None;
 
         if let Some((expiration, size)) = exp_res {
-            println!("Expiration time: {:?}", exp_res.unwrap());
-
             key_expiration = Some(expiration);
 
             current_idx += size as usize;
         }
 
-        let key_type = KeyType::try_from(data[current_idx])?;
+        let key_type = KeyType::from(data[current_idx]);
 
         current_idx += 1;
 
@@ -370,8 +374,6 @@ impl RDB {
                     }
 
                     OperationCode::ResizeDb => {
-                        println!("RESIZE_DB");
-
                         let (db_size, next_idx) = self
                             .decode_length(&data[current_idx..])
                             .with_context(|| format!("Could not parse value in {code} section"))?;
@@ -396,6 +398,8 @@ impl RDB {
                                     format!("Could not parse key in {code} section")
                                 })?;
 
+                            println!("name: {name}, value: {value:?}");
+
                             databases
                                 .get_mut(&selected_db)
                                 .with_context(|| format!("Could not find database {selected_db}"))?
@@ -404,10 +408,8 @@ impl RDB {
 
                             current_idx = next_idx;
 
-                            if let Ok(code) = OperationCode::try_from(&data[current_idx]) {
-                                if code == OperationCode::Eof {
-                                    break;
-                                }
+                            if OperationCode::try_from(&data[current_idx]).is_ok() {
+                                break;
                             } else {
                                 continue;
                             }
@@ -415,17 +417,14 @@ impl RDB {
                     }
 
                     OperationCode::Expiretime => {
-                        println!("EXPIRETIME");
                         self.decode_expiration_time(&data[current_idx..])?;
                     }
 
                     OperationCode::ExpiretimeMs => {
-                        println!("EXPIRETIME_MS");
                         self.decode_expiration_time(&data[current_idx..])?;
                     }
 
                     OperationCode::Eof => {
-                        println!("EOF: {current_idx}");
                         break;
                     }
                 },
@@ -446,12 +445,23 @@ impl Persistent for RDB {
     fn load(&mut self) -> anyhow::Result<HashMap<u32, Arc<Database>>> {
         let mut data = Vec::new();
 
-        let bytes_read = self
-            .reader
-            .read_to_end(&mut data)
-            .with_context(|| "Could not read rdb file")?;
+        let bytes_read = {
+            match self.reader {
+                Some(ref mut reader) => reader
+                    .read_to_end(&mut data)
+                    .with_context(|| "Could not read rdb file")?,
 
-        ensure!(bytes_read > 0, "Empty rdb file");
+                None => 0,
+            }
+        };
+
+        if bytes_read == 0 {
+            let mut hashmap = HashMap::new();
+
+            hashmap.insert(0, Arc::new(Database::new(0)));
+
+            return Ok(hashmap);
+        }
 
         let magic_string = String::from_utf8(data[0..9].to_vec())?;
 
