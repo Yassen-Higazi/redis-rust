@@ -1,6 +1,7 @@
+use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+
 use tokio::sync::{Mutex, RwLock};
 
 use crate::configs::configurations::Configuration;
@@ -76,7 +77,7 @@ impl RedisService {
                                 .to_vec();
 
                             if let Some(instant) = expiration {
-                                if instant > Instant::now() {
+                                if instant > Utc::now() {
                                     result = success;
                                 } else {
                                     db.remove(&key).await;

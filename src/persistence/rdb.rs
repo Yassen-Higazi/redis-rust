@@ -4,11 +4,12 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::database::Database;
 
 use anyhow::{bail, ensure, Context};
+
+use chrono::{DateTime, Utc};
 
 use super::persistence_interface::Persistent;
 
@@ -72,10 +73,9 @@ enum OperationCode {
 
     SelectDb,
 
-    Expiretime,
-
-    ExpiretimeMs,
-
+    // Expiretime,
+    //
+    // ExpiretimeMs,
     ResizeDb,
 
     Aux,
@@ -88,8 +88,8 @@ impl Display for OperationCode {
             OperationCode::Aux => write!(f, "AUX"),
             OperationCode::SelectDb => write!(f, "SELECTDB"),
             OperationCode::ResizeDb => write!(f, "RESIZE_DB"),
-            OperationCode::Expiretime => write!(f, "EXPIRETIME"),
-            OperationCode::ExpiretimeMs => write!(f, "EXPIRETIME_MS"),
+            // OperationCode::Expiretime => write!(f, "EXPIRETIME"),
+            // OperationCode::ExpiretimeMs => write!(f, "EXPIRETIME_MS"),
         }
     }
 }
@@ -103,10 +103,9 @@ impl TryFrom<&u8> for OperationCode {
 
             0xFE => Ok(OperationCode::SelectDb),
 
-            0xFD => Ok(OperationCode::Expiretime),
-
-            0xFC => Ok(OperationCode::ExpiretimeMs),
-
+            // 0xFD => Ok(OperationCode::Expiretime),
+            //
+            // 0xFC => Ok(OperationCode::ExpiretimeMs),
             0xFB => Ok(OperationCode::ResizeDb),
 
             0xFA => Ok(OperationCode::Aux),
@@ -236,22 +235,57 @@ impl RDB {
         }
     }
 
-    fn decode_expiration_time(&self, data: &[u8]) -> anyhow::Result<Option<(Instant, u8)>> {
+    fn decode_expiration_time(
+        &self,
+        data: &[u8],
+    ) -> anyhow::Result<Option<(DateTime<Utc>, usize)>> {
         let first_byte = data[0];
 
-        match first_byte {
+        let mut next_byte_idx = 1;
+
+        let experation_duration = match first_byte {
             // Timestampe in secends
             0xFD => {
-                todo!()
+                let unix_time = u32::from_be_bytes([
+                    data[next_byte_idx + 3],
+                    data[next_byte_idx + 2],
+                    data[next_byte_idx + 1],
+                    data[next_byte_idx],
+                ]);
+
+                next_byte_idx += 4;
+
+                let expiration_time =
+                    DateTime::from_timestamp(unix_time as i64, 0).expect("Invalid timestamp");
+
+                Some((expiration_time, next_byte_idx))
             }
 
             // Timestampe in miliseconds
             0xFC => {
-                todo!()
+                let unix_time = u64::from_be_bytes([
+                    data[next_byte_idx + 7],
+                    data[next_byte_idx + 6],
+                    data[next_byte_idx + 5],
+                    data[next_byte_idx + 4],
+                    data[next_byte_idx + 3],
+                    data[next_byte_idx + 2],
+                    data[next_byte_idx + 1],
+                    data[next_byte_idx],
+                ]);
+
+                next_byte_idx += 8;
+
+                let expiration_time =
+                    DateTime::from_timestamp_millis(unix_time as i64).expect("Invalid timestamp");
+
+                Some((expiration_time, next_byte_idx))
             }
 
-            _ => Ok(None),
-        }
+            _ => None,
+        };
+
+        Ok(experation_duration)
     }
 
     fn decode_key_value(
@@ -293,19 +327,22 @@ impl RDB {
     fn decode_key(
         &self,
         data: &[u8],
-        mut current_idx: usize,
-    ) -> anyhow::Result<(String, Vec<u8>, KeyType, Option<Instant>, usize)> {
-        let exp_res = self
-            .decode_expiration_time(&data[current_idx..])
-            .with_context(|| "Could not parse value")?;
+    ) -> anyhow::Result<(String, Vec<u8>, KeyType, Option<DateTime<Utc>>, usize)> {
+        let mut current_idx = 0usize;
 
-        let mut key_expiration: Option<Instant> = None;
+        let expiration_time = self
+            .decode_expiration_time(data)
+            .with_context(|| "Could not parse expiration time")?;
 
-        if let Some((expiration, size)) = exp_res {
-            key_expiration = Some(expiration);
+        let expiration_time = match expiration_time {
+            Some((expiration_time, next_idx)) => {
+                current_idx += next_idx;
 
-            current_idx += size as usize;
-        }
+                Some(expiration_time)
+            }
+
+            None => None,
+        };
 
         let key_type = KeyType::from(data[current_idx]);
 
@@ -321,7 +358,7 @@ impl RDB {
 
         current_idx += next_idx;
 
-        Ok((key_name, key_value, key_type, key_expiration, current_idx))
+        Ok((key_name, key_value, key_type, expiration_time, current_idx))
     }
 
     async fn parse_file(&self, data: &[u8]) -> anyhow::Result<HashMap<u32, Arc<Database>>> {
@@ -394,19 +431,29 @@ impl RDB {
 
                         loop {
                             let (name, value, _, expiration, next_idx) =
-                                self.decode_key(data, current_idx).with_context(|| {
+                                self.decode_key(&data[current_idx..]).with_context(|| {
                                     format!("Could not parse key in {code} section")
                                 })?;
 
-                            println!("name: {name}, value: {value:?}");
+                            current_idx += next_idx;
 
-                            databases
-                                .get_mut(&selected_db)
-                                .with_context(|| format!("Could not find database {selected_db}"))?
-                                .insert(name, String::from_utf8(value)?, expiration)
-                                .await;
+                            let mut should_insert = true;
 
-                            current_idx = next_idx;
+                            if let Some(exp) = expiration {
+                                if exp < Utc::now() {
+                                    should_insert = false;
+                                }
+                            }
+
+                            if should_insert {
+                                databases
+                                    .get_mut(&selected_db)
+                                    .with_context(|| {
+                                        format!("Could not find database {selected_db}")
+                                    })?
+                                    .insert(name, String::from_utf8(value)?, expiration)
+                                    .await;
+                            }
 
                             if OperationCode::try_from(&data[current_idx]).is_ok() {
                                 break;
@@ -416,20 +463,12 @@ impl RDB {
                         }
                     }
 
-                    OperationCode::Expiretime => {
-                        self.decode_expiration_time(&data[current_idx..])?;
-                    }
-
-                    OperationCode::ExpiretimeMs => {
-                        self.decode_expiration_time(&data[current_idx..])?;
-                    }
-
                     OperationCode::Eof => {
                         break;
                     }
                 },
 
-                Err(_) => bail!("Invalid operation code"),
+                Err(err) => bail!("Invalid operation code: {err}"),
             }
         }
 

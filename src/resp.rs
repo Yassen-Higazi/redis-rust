@@ -1,8 +1,7 @@
+use chrono::{DateTime, Utc};
 use regex::Regex;
-use std::{
-    fmt::Display,
-    time::{Duration, Instant},
-};
+
+use std::{fmt::Display, time::Duration};
 
 #[derive(Debug, Clone)]
 pub enum RespDataTypes {
@@ -170,7 +169,7 @@ pub enum Commands {
 
     Echo(String),
 
-    Set(String, String, Option<Instant>),
+    Set(String, String, Option<DateTime<Utc>>),
 
     Get(String),
 
@@ -259,7 +258,7 @@ impl TryFrom<RespDataTypes> for Commands {
                                 let mut expires_at = None;
 
                                 if let Some(exp_unit_str) = options.get(2) {
-                                    let now = Instant::now();
+                                    let now = Utc::now();
 
                                     let expiration: u64;
 
