@@ -26,3 +26,4 @@ thiserror = "2.0.12"                                        # error handling
 futures = "0.3.31"                                          # async programming
 tokio = { version = "1.45.0", features = ["full"] }
 clap = { version = "4.5.37", features = ["env", "derive"] }
+chrono = "0.4.41"

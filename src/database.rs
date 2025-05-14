@@ -1,12 +1,13 @@
+use chrono::{DateTime, Utc};
 use regex::Regex;
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 use tokio::sync::Mutex;
 
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Database {
     id: u32,
-    data_hashmap: Mutex<HashMap<String, (String, Option<Instant>)>>,
+    data_hashmap: Mutex<HashMap<String, (String, Option<DateTime<Utc>>)>>,
 }
 
 impl Database {
@@ -19,7 +20,7 @@ impl Database {
         }
     }
 
-    pub async fn get(&self, key: &str) -> Option<(String, Option<Instant>)> {
+    pub async fn get(&self, key: &str) -> Option<(String, Option<DateTime<Utc>>)> {
         let hashmap = self.data_hashmap.lock().await;
 
         hashmap.get(key).cloned()
@@ -31,7 +32,7 @@ impl Database {
         hashmap.remove(key);
     }
 
-    pub async fn insert(&self, key: String, value: String, expire_time: Option<Instant>) {
+    pub async fn insert(&self, key: String, value: String, expire_time: Option<DateTime<Utc>>) {
         let mut hashmap = self.data_hashmap.lock().await;
 
         hashmap.insert(key, (value, expire_time));
