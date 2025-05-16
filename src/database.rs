@@ -3,17 +3,18 @@ use regex::Regex;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 
+pub type Record = (String, Option<DateTime<Utc>>);
+
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Database {
     id: u32,
-    data_hashmap: Mutex<HashMap<String, (String, Option<DateTime<Utc>>)>>,
+
+    data_hashmap: Mutex<HashMap<String, Record>>,
 }
 
 impl Database {
     pub fn new(id: u32) -> Self {
-        println!("Creating new database with id: {id}");
-
         Database {
             id,
             data_hashmap: Mutex::new(HashMap::new()),

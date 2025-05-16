@@ -1,34 +1,137 @@
 [![progress-banner](https://backend.codecrafters.io/progress/redis/b1b50667-9b16-4f22-9717-ac00f3426a31)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
 
-This is a starting point for Rust solutions to the
-["Build Your Own Redis" Challenge](https://codecrafters.io/challenges/redis).
+# redis-rust
 
-In this challenge, you'll build a toy Redis clone that's capable of handling
-basic commands like `PING`, `SET` and `GET`. Along the way we'll learn about
-event loops, the Redis protocol and more.
+A Redis clone built in Rust, inspired by the [Build Your Own Redis](https://app.codecrafters.io/courses/redis/overview) challenge by CodeCrafters.
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+This project implements key Redis functionalities, including RESP parsing, in-memory data storage, key expiration, RDB file loading, and multi-client handling using asynchronous I/O.
 
-# Passing the first stage
+---
 
-The entry point for your Redis implementation is in `src/main.rs`. Study and
-uncomment the relevant code, and push your changes to pass the first stage:
+<!--toc:start-->
 
-```sh
-git commit -am "pass 1st stage" # any msg
-git push origin master
+- [🚀 Features](#🚀-features)
+- [🛠 Installation](#🛠-installation)
+  - [Prerequisites](#prerequisites)
+  - [Clone the Repository](#clone-the-repository)
+  - [Build the Project](#build-the-project)
+  - [▶️ Running the Server](#️-running-the-server)
+    - [Start Normally](#start-normally)
+    - [Load Data from an RDB File](#load-data-from-an-rdb-file)
+  - [💬 Connecting & Using redis-cli](#💬-connecting-using-redis-cli)
+- [✅ Examples of Supported Commands](#examples-of-supported-commands)
+  - [🗝️ KEYS (is loaded from RDB)](#🗝️-keys-is-loaded-from-rdb)
+  - [📝 SET](#📝-set)
+  - [📖 GET](#📖-get)
+  - [⚙️ CONFIG](#️-config)
+- [📄 License](#📄-license)
+<!--toc:end-->
+
+---
+
+## 🚀 Features
+
+- RESP (Redis Serialization Protocol) serialization & deserializer
+- TCP server handling multiple concurrent clients
+- Asynchronous I/O using Tokio
+- Basic Redis command support: `PING`, `SET`, `GET`, `CONFIG`, `KEYS`
+- Passive key expiration
+- RDB file parsing and in-memory data loading
+
+---
+
+## 🛠 Installation
+
+### Prerequisites
+
+- [Rust](https://www.rust-lang.org/tools/install)
+- [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+
+### Clone the Repository
+
+```bash
+git clone https://github.com/Yassen-Higazi/redis-rust.git
+cd redis-rust
 ```
 
-That's all!
+### Build the Project
 
-# Stage 2 & beyond
+```bash
+cargo build
+```
 
-Note: This section is for stages 2 and beyond.
+---
 
-1. Ensure you have `cargo (1.54)` installed locally
-1. Run `./your_program.sh` to run your Redis server, which is implemented in
-   `src/main.rs`. This command compiles your Rust project, so it might be slow
-   the first time you run it. Subsequent runs will be fast.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+### ▶️ Running the Server
+
+#### Start Normally
+
+```bash
+cargo run
+```
+
+#### Load Data from an RDB File
+
+```bash
+cargo run -- -d ./data
+```
+
+This will parse the dump.rdb file in the ./data directory and populate the in-memory store on startup.
+
+### 💬 Connecting & Using redis-cli
+
+```bash
+redis-cli ping
+PONG
+```
+
+---
+
+## ✅ Examples of Supported Commands
+
+### 🗝️ KEYS (is loaded from RDB)
+
+```bash
+redis-cli keys *
+1) "test2"
+2) "test1"
+3) "test3"
+```
+
+### 📝 SET
+
+```bash
+redis-cli set api_key test_api_key
+OK
+```
+
+### 📖 GET
+
+```bash
+redis-cli get api_key
+"test_api_key"
+```
+
+```bash
+redis-cli get test1
+"test"
+```
+
+```bash
+redis-cli get test
+(nil)
+```
+
+### ⚙️ CONFIG
+
+```bash
+redis-cli config get dir
+1) "dir"
+2) "data"
+```
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](license.md). See the LICENSE file for details.

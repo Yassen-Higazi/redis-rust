@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::database::Database;
 
 use anyhow::{bail, ensure, Context};
+
 use chrono::{DateTime, Utc};
 
 use super::persistence_interface::Persistent;
