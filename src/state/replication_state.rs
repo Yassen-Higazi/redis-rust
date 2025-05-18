@@ -66,7 +66,7 @@ repl_backlog_histlen:
             ),
             Self::Slave { id, .. } => format!(
                 "# Replication
-role:Slave
+role:slave
 slave_replid:{id} "
             ),
         }
