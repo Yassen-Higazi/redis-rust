@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use super::cmd_options::CmdOptions;
 
+#[derive(Debug, Clone)]
 pub struct Configuration {
     pub port: String,
 

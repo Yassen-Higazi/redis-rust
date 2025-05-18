@@ -1,3 +1,4 @@
+use anyhow::bail;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use std::{fmt::Display, time::Duration};
@@ -177,6 +178,40 @@ pub enum Commands {
     Keys(String),
 }
 
+impl Commands {
+    fn decode_command_options(arr: &Vec<RespDataTypes>, name: &str) -> anyhow::Result<Vec<String>> {
+        let mut options = Vec::new();
+
+        if arr.len() < 2 {
+            bail!("{name} command must be followed by a key");
+        }
+
+        for i in 1..arr.len() {
+            let record_option = arr.get(i);
+
+            match record_option {
+                None => {
+                    bail!("{name} command must be followed by a key");
+                }
+
+                Some(record) => match record {
+                    RespDataTypes::BulkString(string) => {
+                        options.push(string.to_owned());
+                    }
+
+                    RespDataTypes::Integer(int) => {
+                        options.push(int.to_string());
+                    }
+
+                    _ => bail!("{name} command must be fallowed by a key"),
+                },
+            }
+        }
+
+        Ok(options)
+    }
+}
+
 impl TryFrom<RespDataTypes> for Commands {
     type Error = &'static str;
 
@@ -194,65 +229,15 @@ impl TryFrom<RespDataTypes> for Commands {
                             .as_str()
                         {
                             "ECHO" => {
-                                let mut key = String::new();
+                                let options = Self::decode_command_options(&arr, "ECHO").unwrap();
 
-                                for i in 1..arr.len() {
-                                    let record_option = arr.get(i);
-
-                                    match record_option {
-                                        None => {
-                                            return Err("Echo command must be followed by a key");
-                                        }
-
-                                        Some(record) => match record {
-                                            RespDataTypes::BulkString(string) => {
-                                                key.push_str(string.as_str());
-                                            }
-
-                                            RespDataTypes::Integer(int) => {
-                                                key.push_str(int.to_string().as_str());
-                                            }
-
-                                            _ => {
-                                                return Err(
-                                                    "Echo command must be fallowed by a key",
-                                                )
-                                            }
-                                        },
-                                    }
-                                }
-
-                                Ok(Self::Echo(key))
+                                Ok(Self::Echo(options[0].clone()))
                             }
 
                             "PING" => Ok(Commands::Ping),
 
                             "SET" => {
-                                let mut options = Vec::new();
-
-                                for i in 1..arr.len() {
-                                    let record_option = arr.get(i);
-
-                                    match record_option {
-                                        None => {
-                                            return Err("SET command must be followed by a key");
-                                        }
-
-                                        Some(record) => match record {
-                                            RespDataTypes::BulkString(string) => {
-                                                options.push(string.to_owned());
-                                            }
-
-                                            RespDataTypes::Integer(int) => {
-                                                options.push(int.to_string());
-                                            }
-
-                                            _ => {
-                                                return Err("SET command must be fallowed by a key")
-                                            }
-                                        },
-                                    }
-                                }
+                                let options = Self::decode_command_options(&arr, "SET").unwrap();
 
                                 let mut expires_at = None;
 
@@ -291,97 +276,19 @@ impl TryFrom<RespDataTypes> for Commands {
                             }
 
                             "GET" => {
-                                let mut options = Vec::new();
-
-                                for i in 1..arr.len() {
-                                    let record_option = arr.get(i);
-
-                                    match record_option {
-                                        None => {
-                                            return Err("Get command must be followed by a key");
-                                        }
-
-                                        Some(record) => match record {
-                                            RespDataTypes::BulkString(string) => {
-                                                options.push(string.to_owned());
-                                            }
-
-                                            RespDataTypes::Integer(int) => {
-                                                options.push(int.to_string());
-                                            }
-
-                                            _ => {
-                                                return Err("Get command must be fallowed by a key")
-                                            }
-                                        },
-                                    }
-                                }
+                                let options = Self::decode_command_options(&arr, "GET").unwrap();
 
                                 Ok(Self::Get(options[0].clone()))
                             }
 
                             "KEYS" => {
-                                let mut options = Vec::new();
-
-                                if arr.len() < 2 {
-                                    return Err("KEYS command must be followed by a key");
-                                }
-
-                                for i in 1..arr.len() {
-                                    let record_option = arr.get(i);
-
-                                    match record_option {
-                                        None => {
-                                            return Err("KEYS command must be followed by a key");
-                                        }
-
-                                        Some(record) => match record {
-                                            RespDataTypes::BulkString(string) => {
-                                                options.push(string.to_owned());
-                                            }
-
-                                            RespDataTypes::Integer(int) => {
-                                                options.push(int.to_string());
-                                            }
-
-                                            _ => {
-                                                return Err(
-                                                    "KEYS command must be fallowed by a key",
-                                                )
-                                            }
-                                        },
-                                    }
-                                }
+                                let options = Self::decode_command_options(&arr, "KEYS").unwrap();
 
                                 Ok(Self::Keys(options[0].clone()))
                             }
 
                             "CONFIG" => {
-                                let mut options: Vec<String> = Vec::new();
-
-                                for i in 1..arr.len() {
-                                    let record_option = arr.get(i);
-
-                                    match record_option {
-                                        None => {
-                                            return Err(
-                                                "Config command must be fallowed by a subcommand",
-                                            );
-                                        }
-
-                                        Some(record) => match record {
-                                            RespDataTypes::BulkString(string) => {
-                                                options.push(string.to_owned());
-                                            }
-
-                                            RespDataTypes::Integer(int) => {
-                                                options.push(int.to_string());
-                                            }
-
-                                            _ => return Err("Invalid Config Command"),
-                                        },
-                                    }
-                                }
+                                let options = Self::decode_command_options(&arr, "CONFIG").unwrap();
 
                                 Ok(Self::Config(options))
                             }
