@@ -55,38 +55,34 @@ impl RedisServer {
 
                         println!("Reading Data from socket...");
 
-                        let mut bytes_read: usize;
-
-                        loop {
-                            bytes_read = stream.read(&mut buffer).await.unwrap_or(0);
-
+                        while let Ok(bytes_read) = stream.read(&mut buffer).await {
                             println!("Bytes read: {bytes_read}");
 
-                            if bytes_read < 2048 || bytes_read == 0 {
-                                break;
-                            }
-                        }
-
-                        let command = String::from_utf8(buffer[0..bytes_read].to_vec())
-                            .expect("Could not convert string");
-
-                        let result = service_clone.execute_command(&command).await;
-
-                        match result {
-                            Ok(response) => {
-                                stream.write_all(response.as_slice()).await.unwrap();
+                            if bytes_read == 0 {
+                                return;
                             }
 
-                            Err(err) => {
-                                println!("Error: {:?}", err);
+                            let command = String::from_utf8(buffer[0..bytes_read].to_vec())
+                                .expect("Could not convert string");
 
-                                stream
-                                    .write_all(format!("-{err}\r\n").as_bytes())
-                                    .await
-                                    .with_context(|| {
-                                        format!("Error writing error to socket: {err:?}")
-                                    })
-                                    .unwrap();
+                            let result = service_clone.execute_command(&command).await;
+
+                            match result {
+                                Ok(response) => {
+                                    stream.write_all(response.as_slice()).await.unwrap();
+                                }
+
+                                Err(err) => {
+                                    println!("Error: {:?}", err);
+
+                                    stream
+                                        .write_all(format!("-{err}\r\n").as_bytes())
+                                        .await
+                                        .with_context(|| {
+                                            format!("Error writing error to socket: {err:?}")
+                                        })
+                                        .unwrap();
+                                }
                             }
                         }
                     });
