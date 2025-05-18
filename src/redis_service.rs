@@ -148,6 +148,16 @@ impl RedisService {
                             bail!("Invalid Config command")
                         }
                     }
+
+                    Commands::Info(key) => {
+                        let result = match key.unwrap_or("*".to_string()).to_uppercase().as_str() {
+                            "REPLICATION" => self.state.read().await.get_replication_status(),
+
+                            _ => bail!("Invalid Info Sub command"),
+                        };
+
+                        RespDataTypes::from(result).to_string().as_bytes().to_vec()
+                    }
                 };
 
                 Ok(response)

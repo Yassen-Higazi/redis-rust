@@ -27,7 +27,7 @@ impl RedisServer {
         let address = state.get_address().await;
         let rdb = RDB::new(&state.get_rdb_path().await)?;
 
-        // free state lock
+        // release state lock
         drop(state);
 
         let service = RedisService::new(self.state.clone(), Box::new(rdb)).await;

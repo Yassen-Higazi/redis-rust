@@ -176,14 +176,24 @@ pub enum Commands {
     Config(Vec<String>),
 
     Keys(String),
+
+    Info(Option<String>),
 }
 
 impl Commands {
-    fn decode_command_options(arr: &Vec<RespDataTypes>, name: &str) -> anyhow::Result<Vec<String>> {
+    fn decode_command_options(
+        arr: &[RespDataTypes],
+        name: &str,
+        must_have_options: bool,
+    ) -> anyhow::Result<Vec<String>> {
         let mut options = Vec::new();
 
         if arr.len() < 2 {
-            bail!("{name} command must be followed by a key");
+            if must_have_options {
+                bail!("{name} command must be followed by a key");
+            } else {
+                return Ok(options);
+            }
         }
 
         for i in 1..arr.len() {
@@ -191,7 +201,11 @@ impl Commands {
 
             match record_option {
                 None => {
-                    bail!("{name} command must be followed by a key");
+                    if must_have_options {
+                        bail!("{name} command must be followed by a key");
+                    } else {
+                        break;
+                    }
                 }
 
                 Some(record) => match record {
@@ -203,7 +217,7 @@ impl Commands {
                         options.push(int.to_string());
                     }
 
-                    _ => bail!("{name} command must be fallowed by a key"),
+                    _ => bail!("{name} command must be followed by a key"),
                 },
             }
         }
@@ -229,7 +243,8 @@ impl TryFrom<RespDataTypes> for Commands {
                             .as_str()
                         {
                             "ECHO" => {
-                                let options = Self::decode_command_options(&arr, "ECHO").unwrap();
+                                let options =
+                                    Self::decode_command_options(&arr, "ECHO", true).unwrap();
 
                                 Ok(Self::Echo(options[0].clone()))
                             }
@@ -237,7 +252,8 @@ impl TryFrom<RespDataTypes> for Commands {
                             "PING" => Ok(Commands::Ping),
 
                             "SET" => {
-                                let options = Self::decode_command_options(&arr, "SET").unwrap();
+                                let options =
+                                    Self::decode_command_options(&arr, "SET", true).unwrap();
 
                                 let mut expires_at = None;
 
@@ -276,21 +292,31 @@ impl TryFrom<RespDataTypes> for Commands {
                             }
 
                             "GET" => {
-                                let options = Self::decode_command_options(&arr, "GET").unwrap();
+                                let options =
+                                    Self::decode_command_options(&arr, "GET", true).unwrap();
 
                                 Ok(Self::Get(options[0].clone()))
                             }
 
                             "KEYS" => {
-                                let options = Self::decode_command_options(&arr, "KEYS").unwrap();
+                                let options =
+                                    Self::decode_command_options(&arr, "KEYS", true).unwrap();
 
                                 Ok(Self::Keys(options[0].clone()))
                             }
 
                             "CONFIG" => {
-                                let options = Self::decode_command_options(&arr, "CONFIG").unwrap();
+                                let options =
+                                    Self::decode_command_options(&arr, "CONFIG", true).unwrap();
 
                                 Ok(Self::Config(options))
+                            }
+
+                            "INFO" => {
+                                let options =
+                                    Self::decode_command_options(&arr, "INFO", false).unwrap();
+
+                                Ok(Self::Info(options.first().cloned()))
                             }
 
                             _ => Err("Invalid Command"),
