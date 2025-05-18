@@ -1,6 +1,5 @@
 use anyhow::Ok;
 use clap::Parser;
-use redis_server::listen;
 
 mod configs;
 mod database;
@@ -8,16 +7,17 @@ mod persistence;
 mod redis_server;
 mod redis_service;
 mod resp;
+mod state;
 
-use configs::{cmd_options::CmdOptions, configurations::Configuration};
+use configs::cmd_options::CmdOptions;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = CmdOptions::parse();
 
-    let configs = Configuration::from(args);
+    let redis_server = redis_server::RedisServer::new(args);
 
-    listen(configs).await?;
+    redis_server.listen().await?;
 
     Ok(())
 }

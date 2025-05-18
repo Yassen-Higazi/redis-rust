@@ -1,31 +1,34 @@
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
-use tokio::sync::{Mutex, RwLock};
-
-use crate::configs::configurations::Configuration;
 use crate::database::Database;
 use crate::persistence::persistence_interface::Persistent;
 use crate::resp::{Commands, RespDataTypes};
+use crate::state::server_state::ServerState;
 
 use anyhow::bail;
 
+#[derive(Debug)]
 pub struct RedisService {
     selected_db: u32,
-    configs: Mutex<Configuration>,
+    state: Arc<RwLock<ServerState>>,
     databases: RwLock<HashMap<u32, Arc<Database>>>,
 }
 
 impl RedisService {
-    pub async fn new(configs: Configuration, mut persistent_layer: Box<dyn Persistent>) -> Self {
+    pub async fn new(
+        configs: Arc<RwLock<ServerState>>,
+        mut persistent_layer: Box<dyn Persistent>,
+    ) -> Self {
         let databases = persistent_layer
             .load()
             .expect("Could not load data from persistent layer");
 
         Self {
             selected_db: 0,
-            configs: Mutex::new(configs),
+            state: configs,
             databases: RwLock::new(databases),
         }
     }
@@ -115,9 +118,14 @@ impl RedisService {
 
                                         match attribute {
                                             Some(attr) => {
-                                                let configs = self.configs.lock().await;
+                                                let value = self
+                                                    .state
+                                                    .read()
+                                                    .await
+                                                    .get_from_config(attr)
+                                                    .await;
 
-                                                if let Some(value) = configs.get(attr) {
+                                                if let Some(value) = value {
                                                     res.push(attr.to_owned());
                                                     res.push(value);
                                                 } else {
@@ -139,6 +147,16 @@ impl RedisService {
                         } else {
                             bail!("Invalid Config command")
                         }
+                    }
+
+                    Commands::Info(key) => {
+                        let result = match key.unwrap_or("*".to_string()).to_uppercase().as_str() {
+                            "REPLICATION" => self.state.read().await.get_replication_status(),
+
+                            _ => bail!("Invalid Info Sub command"),
+                        };
+
+                        RespDataTypes::from(result).to_string().as_bytes().to_vec()
                     }
                 };
 
