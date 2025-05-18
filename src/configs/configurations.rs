@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::state::replication_state::Role;
+
 use super::cmd_options::CmdOptions;
 
 #[derive(Debug, Clone)]
@@ -11,6 +13,10 @@ pub struct Configuration {
     pub dir: String,
 
     pub filename: String,
+
+    pub master_address: Option<String>,
+
+    pub replication_role: Role,
 }
 
 impl Configuration {
@@ -35,6 +41,10 @@ impl Configuration {
             _ => None,
         }
     }
+
+    pub fn get_master_address(&self) -> Option<String> {
+        self.master_address.clone()
+    }
 }
 
 impl From<CmdOptions> for Configuration {
@@ -44,6 +54,21 @@ impl From<CmdOptions> for Configuration {
             port: value.port,
             host: value.host,
             filename: value.filename,
+            master_address: value.replicatof.clone().map(|address| {
+                format!(
+                    "{}:{}",
+                    address.split_whitespace().next().unwrap(),
+                    address.split_whitespace().nth(1).unwrap()
+                )
+            }),
+
+            replication_role: value.replicatof.map_or(Role::Master, |address| {
+                if address.is_empty() {
+                    Role::Master
+                } else {
+                    Role::Slave
+                }
+            }),
         }
     }
 }

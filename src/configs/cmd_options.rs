@@ -13,4 +13,7 @@ pub struct CmdOptions {
 
     #[arg(short = 'p', long = "port", default_value = "6379")]
     pub port: String,
+
+    #[arg(short, long = "replicaof")]
+    pub replicatof: Option<String>,
 }

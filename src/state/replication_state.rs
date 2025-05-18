@@ -18,15 +18,33 @@ pub enum Replica {
         id: String,
         address: String,
         master_id: String,
+        master_address: String,
     },
 }
 
 impl Replica {
-    pub fn new() -> Self {
+    pub fn new(role: Role, master_address: Option<String>) -> Self {
+        match role {
+            Role::Master => Self::new_master(),
+
+            Role::Slave => Self::new_slave(master_address),
+        }
+    }
+
+    pub fn new_master() -> Self {
         Self::Master {
             id: String::from("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"),
             address: String::from("localhost:6379"),
             slaves: Vec::new(),
+        }
+    }
+
+    pub fn new_slave(master_address: Option<String>) -> Self {
+        Self::Slave {
+            id: String::from("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"),
+            master_id: String::from("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"),
+            master_address: master_address.expect("Master address is required for slave"),
+            address: String::from("localhost:6379"),
         }
     }
 
