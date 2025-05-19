@@ -18,7 +18,11 @@ impl ServerState {
     pub fn new(config: Configuration) -> Self {
         Self {
             id: String::new(),
-            replication: Replica::new(config.replication_role.clone(), config.get_master_address()),
+            replication: Replica::new(
+                config.port.parse::<u16>().unwrap(),
+                config.replication_role.clone(),
+                config.get_master_address(),
+            ),
             config: RwLock::new(config),
         }
     }

@@ -20,24 +20,24 @@ pub enum Role {
 pub enum Replica {
     Master {
         id: String,
-        address: String,
+        address: SocketAddr,
         slaves: Vec<Replica>,
         replication_offset: i64,
     },
 
     Slave {
         id: String,
-        address: String,
+        address: SocketAddr,
         master_address: SocketAddr,
     },
 }
 
 impl Replica {
-    pub fn new(role: Role, master_address: Option<SocketAddr>) -> Self {
+    pub fn new(port: u16, role: Role, master_address: Option<SocketAddr>) -> Self {
         match role {
             Role::Master => Self::new_master(),
 
-            Role::Slave => Self::new_slave(master_address),
+            Role::Slave => Self::new_slave(port, master_address),
         }
     }
 
@@ -45,16 +45,16 @@ impl Replica {
         Self::Master {
             id: gen_id(),
             replication_offset: 0,
-            address: String::from("localhost:6379"),
+            address: SocketAddr::from(([127, 0, 0, 1], 6379)),
             slaves: Vec::new(),
         }
     }
 
-    pub fn new_slave(master_address: Option<SocketAddr>) -> Self {
+    pub fn new_slave(port: u16, master_address: Option<SocketAddr>) -> Self {
         Self::Slave {
             id: gen_id(),
             master_address: master_address.expect("Master address is required for slave"),
-            address: String::from("localhost:6379"),
+            address: SocketAddr::from(([127, 0, 0, 1], port)),
         }
     }
 
@@ -66,13 +66,34 @@ impl Replica {
                 println!("Initializing slave replica...");
                 println!("Connecting to master at {}", master_address);
 
-                self.ping_master(master_address).await
+                self.master_handshake()
+                    .await
+                    .map_err(|e| {
+                        println!("Error pinging master: {e:?}");
+                    })
+                    .unwrap_or(());
+
+                Ok(())
             }
         }
     }
 
-    async fn ping_master(&self, master_address: &SocketAddr) -> anyhow::Result<()> {
-        let mut stream = TcpStream::connect(master_address)
+    fn get_master_address(&self) -> Option<SocketAddr> {
+        match self {
+            Self::Master { .. } => None,
+            Self::Slave { master_address, .. } => Some(*master_address),
+        }
+    }
+
+    fn get_address(&self) -> SocketAddr {
+        match self {
+            Self::Master { address, .. } => *address,
+            Self::Slave { address, .. } => *address,
+        }
+    }
+
+    async fn master_handshake(&self) -> anyhow::Result<()> {
+        let mut stream = TcpStream::connect(self.get_master_address().unwrap())
             .await
             .with_context(|| "Could not connect to master")?;
 
@@ -85,14 +106,72 @@ impl Replica {
             .await
             .with_context(|| "Could not send PING command to master")?;
 
-        let mut buffer = [0u8; 512];
+        let buffer = &mut [0u8; 512];
 
         stream
-            .read_exact(&mut buffer)
+            .read(buffer)
             .await
             .with_context(|| "Could not read master response")?;
 
-        println!("Master response: {}", String::from_utf8_lossy(&buffer));
+        println!(
+            "Handshake (1/3) Master response: {}",
+            String::from_utf8_lossy(buffer)
+        );
+
+        stream
+            .write_all(
+                RespDataTypes::Array(vec![
+                    RespDataTypes::BulkString("REPLCONF".to_string()),
+                    RespDataTypes::BulkString("listening-port".to_string()),
+                    RespDataTypes::BulkString(self.get_address().port().to_string()),
+                ])
+                .to_string()
+                .as_bytes(),
+            )
+            .await
+            .with_context(|| "Could not send REPLCONF listening-port command to master")?;
+
+        stream
+            .read(buffer)
+            .await
+            .with_context(|| "Could not read master response")?;
+
+        println!(
+            "Handshake (2.1/3) Master response: {}",
+            String::from_utf8_lossy(buffer)
+        );
+
+        stream
+            .write_all(
+                RespDataTypes::from(vec![
+                    String::from("REPLCONF"),
+                    String::from("capa"),
+                    String::from("psync2"),
+                ])
+                .to_string()
+                .as_bytes(),
+            )
+            .await
+            .with_context(|| "Could not send REPLCONF capa command to master")?;
+
+        stream
+            .read(buffer)
+            .await
+            .with_context(|| "Could not read master response")?;
+
+        println!(
+            "Handshake (2.2/3) Master response: {}",
+            String::from_utf8_lossy(buffer)
+        );
+
+        // let mut buffer = [0u8; 512];
+        //
+        // stream
+        //     .read_exact(&mut buffer)
+        //     .await
+        //     .with_context(|| "Could not read master response")?;
+        //
+        // println!("Master response: {}", String::from_utf8_lossy(&buffer));
 
         Ok(())
     }
