@@ -14,8 +14,7 @@ pub enum RespDataTypes {
 
     Array(Vec<RespDataTypes>),
 
-    #[allow(dead_code)]
-    SimpleError,
+    SimpleError(Option<String>),
 }
 
 impl RespDataTypes {
@@ -49,7 +48,9 @@ impl Display for RespDataTypes {
                 write!(f, "*{}\r\n{}", arr.len(), result)
             }
 
-            _ => write!(f, "Invalid Type"),
+            Self::SimpleError(str) => {
+                write!(f, "$-{}\r\n", str.to_owned().unwrap_or("1".to_string()))
+            }
         }
     }
 }
