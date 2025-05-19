@@ -8,6 +8,7 @@ mod redis_server;
 mod redis_service;
 mod resp;
 mod state;
+mod utils;
 
 use configs::cmd_options::CmdOptions;
 
