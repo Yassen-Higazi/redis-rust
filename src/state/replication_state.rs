@@ -1,3 +1,5 @@
+use crate::utils::gen_id;
+
 #[allow(unused)]
 #[derive(Debug, Clone)]
 pub enum Role {
@@ -12,12 +14,12 @@ pub enum Replica {
         id: String,
         address: String,
         slaves: Vec<Replica>,
+        replication_offset: i64,
     },
 
     Slave {
         id: String,
         address: String,
-        master_id: String,
         master_address: String,
     },
 }
@@ -33,7 +35,8 @@ impl Replica {
 
     pub fn new_master() -> Self {
         Self::Master {
-            id: String::from("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"),
+            id: gen_id(),
+            replication_offset: 0,
             address: String::from("localhost:6379"),
             slaves: Vec::new(),
         }
@@ -41,8 +44,7 @@ impl Replica {
 
     pub fn new_slave(master_address: Option<String>) -> Self {
         Self::Slave {
-            id: String::from("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"),
-            master_id: String::from("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"),
+            id: gen_id(),
             master_address: master_address.expect("Master address is required for slave"),
             address: String::from("localhost:6379"),
         }
@@ -50,12 +52,17 @@ impl Replica {
 
     pub fn get_replication_status(&self) -> String {
         match self {
-            Self::Master { id, slaves, .. } => format!(
+            Self::Master {
+                id,
+                slaves,
+                replication_offset,
+                ..
+            } => format!(
                 "# Replication
 role:master
 connected_slaves:{}
 master_replid:{id}
-master_repl_offset:0
+master_repl_offset:{replication_offset}
 second_repl_offset:-1
 repl_backlog_active:0
 repl_backlog_size:1048576

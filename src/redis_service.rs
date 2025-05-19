@@ -43,7 +43,7 @@ impl RedisService {
             .clone();
     }
 
-    pub async fn execute_command(&self, command: &str) -> anyhow::Result<Vec<u8>> {
+    pub async fn execute_command(&self, command: &str) -> anyhow::Result<RespDataTypes> {
         let command_vec = command.split("\r\n").collect::<Vec<&str>>();
 
         let data_result = RespDataTypes::try_from(command_vec[..command_vec.len() - 1].to_vec());
@@ -55,16 +55,16 @@ impl RedisService {
         match cmd {
             Ok(cmd) => {
                 let response = match cmd {
-                    Commands::Ping => b"+PONG\r\n".to_vec(),
+                    Commands::Ping => RespDataTypes::SimpleString("PONG".to_string()),
 
-                    Commands::Echo(message) => format!("+{message}\r\n").as_bytes().to_vec(),
+                    Commands::Echo(message) => RespDataTypes::SimpleString(message),
 
                     Commands::Set(key, value, expiration) => {
                         let db = self.get_selected_db().await;
 
                         db.insert(key, value.clone(), expiration).await;
 
-                        "+OK\r\n".as_bytes().to_vec()
+                        RespDataTypes::SimpleString("OK".to_string())
                     }
 
                     Commands::Get(key) => {
@@ -72,12 +72,10 @@ impl RedisService {
 
                         let value_opt = db.get(&key).await;
 
-                        let mut result = "$-1\r\n".as_bytes().to_vec();
+                        let mut result = RespDataTypes::SimpleError(None);
 
                         if let Some((value, expiration)) = value_opt {
-                            let success = format!("${}\r\n{value}\r\n", value.len())
-                                .as_bytes()
-                                .to_vec();
+                            let success = RespDataTypes::BulkString(value);
 
                             if let Some(instant) = expiration {
                                 if instant > Utc::now() {
@@ -89,6 +87,9 @@ impl RedisService {
                                 result = success
                             }
                         }
+
+                        println!("Get result: {}", result);
+
                         result
                     }
 
@@ -102,9 +103,6 @@ impl RedisService {
                         };
 
                         RespDataTypes::from(result_vec)
-                            .to_string()
-                            .as_bytes()
-                            .to_vec()
                     }
 
                     Commands::Config(options) => {
@@ -137,7 +135,7 @@ impl RedisService {
                                         }
                                     }
 
-                                    RespDataTypes::from(res).to_string().as_bytes().to_vec()
+                                    RespDataTypes::from(res)
                                 }
 
                                 _ => {
@@ -156,7 +154,7 @@ impl RedisService {
                             _ => bail!("Invalid Info Sub command"),
                         };
 
-                        RespDataTypes::from(result).to_string().as_bytes().to_vec()
+                        RespDataTypes::BulkString(result)
                     }
                 };
 

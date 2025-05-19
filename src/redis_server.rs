@@ -69,7 +69,10 @@ impl RedisServer {
 
                             match result {
                                 Ok(response) => {
-                                    stream.write_all(response.as_slice()).await.unwrap();
+                                    stream
+                                        .write_all(response.to_string().as_bytes())
+                                        .await
+                                        .unwrap();
                                 }
 
                                 Err(err) => {
