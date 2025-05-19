@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{net::SocketAddr, path::PathBuf};
 
 use crate::state::replication_state::Role;
 
@@ -14,7 +14,7 @@ pub struct Configuration {
 
     pub filename: String,
 
-    pub master_address: Option<String>,
+    pub master_address: Option<SocketAddr>,
 
     pub replication_role: Role,
 }
@@ -42,7 +42,7 @@ impl Configuration {
         }
     }
 
-    pub fn get_master_address(&self) -> Option<String> {
+    pub fn get_master_address(&self) -> Option<SocketAddr> {
         self.master_address.clone()
     }
 }
@@ -54,21 +54,8 @@ impl From<CmdOptions> for Configuration {
             port: value.port,
             host: value.host,
             filename: value.filename,
-            master_address: value.replicatof.clone().map(|address| {
-                format!(
-                    "{}:{}",
-                    address.split_whitespace().next().unwrap(),
-                    address.split_whitespace().nth(1).unwrap()
-                )
-            }),
-
-            replication_role: value.replicatof.map_or(Role::Master, |address| {
-                if address.is_empty() {
-                    Role::Master
-                } else {
-                    Role::Slave
-                }
-            }),
+            master_address: value.replicatof,
+            replication_role: value.replicatof.map_or(Role::Master, |_| Role::Slave),
         }
     }
 }

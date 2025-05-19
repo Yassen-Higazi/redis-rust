@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use crate::utils::gen_id;
 
 #[allow(unused)]
@@ -20,12 +22,12 @@ pub enum Replica {
     Slave {
         id: String,
         address: String,
-        master_address: String,
+        master_address: SocketAddr,
     },
 }
 
 impl Replica {
-    pub fn new(role: Role, master_address: Option<String>) -> Self {
+    pub fn new(role: Role, master_address: Option<SocketAddr>) -> Self {
         match role {
             Role::Master => Self::new_master(),
 
@@ -42,7 +44,7 @@ impl Replica {
         }
     }
 
-    pub fn new_slave(master_address: Option<String>) -> Self {
+    pub fn new_slave(master_address: Option<SocketAddr>) -> Self {
         Self::Slave {
             id: gen_id(),
             master_address: master_address.expect("Master address is required for slave"),
