@@ -38,6 +38,10 @@ impl ServerState {
     pub fn get_replication_status(&self) -> String {
         self.replication.get_replication_status()
     }
+
+    pub async fn init_replica(&self) -> anyhow::Result<()> {
+        self.replication.init().await
+    }
 }
 
 impl From<CmdOptions> for ServerState {

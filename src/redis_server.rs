@@ -27,6 +27,14 @@ impl RedisServer {
         let address = state.get_address().await;
         let rdb = RDB::new(&state.get_rdb_path().await)?;
 
+        state
+            .init_replica()
+            .await
+            .map_err(|e| {
+                println!("Error initializing replica: {e:?}");
+            })
+            .unwrap_or(());
+
         // release state lock
         drop(state);
 

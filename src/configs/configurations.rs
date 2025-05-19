@@ -43,7 +43,7 @@ impl Configuration {
     }
 
     pub fn get_master_address(&self) -> Option<SocketAddr> {
-        self.master_address.clone()
+        self.master_address
     }
 }
 
