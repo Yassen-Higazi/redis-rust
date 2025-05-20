@@ -179,6 +179,10 @@ pub enum Commands {
     Keys(String),
 
     Info(Option<String>),
+
+    REPLCONF(String, String),
+
+    PSYNC(String, String),
 }
 
 impl Commands {
@@ -318,6 +322,28 @@ impl TryFrom<RespDataTypes> for Commands {
                                     Self::decode_command_options(&arr, "INFO", false).unwrap();
 
                                 Ok(Self::Info(options.first().cloned()))
+                            }
+
+                            "REPLCONF" => {
+                                let options =
+                                    Self::decode_command_options(&arr, "REPLCONF", true).unwrap();
+
+                                if options.len() == 2 {
+                                    Ok(Self::REPLCONF(options[0].clone(), options[1].clone()))
+                                } else {
+                                    Err("Invalid REPLCONF command")
+                                }
+                            }
+
+                            "PSYNC" => {
+                                let options =
+                                    Self::decode_command_options(&arr, "PSYNC", true).unwrap();
+
+                                if options.len() == 2 {
+                                    Ok(Self::PSYNC(options[0].clone(), options[1].clone()))
+                                } else {
+                                    Err("Invalid PSYNC command")
+                                }
                             }
 
                             _ => Err("Invalid Command"),

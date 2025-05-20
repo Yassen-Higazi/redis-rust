@@ -156,6 +156,20 @@ impl RedisService {
 
                         RespDataTypes::BulkString(result)
                     }
+
+                    Commands::REPLCONF(op1, op2) => {
+                        println!("REPLCONF {op1} {op2}");
+
+                        RespDataTypes::SimpleString("OK".to_string())
+                    }
+
+                    Commands::PSYNC(op1, op2) => {
+                        println!("PSYNC {op1} {op2}");
+
+                        let mut server_state = self.state.write().await;
+
+                        server_state.psync().await?
+                    }
                 };
 
                 Ok(response)

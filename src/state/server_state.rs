@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use tokio::sync::RwLock;
 
-use crate::configs::{cmd_options::CmdOptions, configurations::Configuration};
+use crate::{
+    configs::{cmd_options::CmdOptions, configurations::Configuration},
+    resp::RespDataTypes,
+};
 
 use super::replication_state::Replica;
 
@@ -45,6 +48,10 @@ impl ServerState {
 
     pub async fn init_replica(&mut self) -> anyhow::Result<()> {
         self.replication.init().await
+    }
+
+    pub async fn psync(&mut self) -> anyhow::Result<RespDataTypes> {
+        self.replication.psync(None).await
     }
 }
 

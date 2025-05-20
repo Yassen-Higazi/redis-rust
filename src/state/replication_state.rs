@@ -141,7 +141,7 @@ impl Replica {
             .await
             .with_context(|| "Could not send REPLCONF command to master")?;
 
-        self.psync(&mut stream)
+        self.psync(Some(&mut stream))
             .await
             .with_context(|| "Could not send PSYNC command to master")?;
 
@@ -225,56 +225,77 @@ impl Replica {
         Ok(())
     }
 
-    async fn psync(&mut self, stream: &mut TcpStream) -> anyhow::Result<()> {
-        let buffer = &mut [0u8; 512];
+    pub async fn psync(
+        &mut self,
+        _stream: Option<&mut TcpStream>,
+    ) -> anyhow::Result<RespDataTypes> {
+        match self {
+            Self::Master {
+                id,
+                replication_offset,
+                ..
+            } => {
+                return Ok(RespDataTypes::SimpleString(format!(
+                    "FULLRESYNC {id} {replication_offset}"
+                )));
+            }
 
-        stream
-            .write_all(
-                RespDataTypes::Array(vec![
-                    RespDataTypes::BulkString("PSYNC".to_string()),
-                    RespDataTypes::BulkString(self.get_master_id()),
-                    RespDataTypes::BulkString(self.get_replication_offset().to_string()),
-                ])
-                .to_string()
-                .as_bytes(),
-            )
-            .await
-            .with_context(|| "Could not send REPLCONF capa command to master")?;
+            Self::Slave { .. } => {
+                let buffer = &mut [0u8; 512];
 
-        stream
-            .read(buffer)
-            .await
-            .with_context(|| "Could not read master response")?;
+                let stream = _stream.ok_or_else(|| anyhow::anyhow!("Stream is not available"))?;
 
-        let res = String::from_utf8_lossy(buffer);
+                stream
+                    .write_all(
+                        RespDataTypes::Array(vec![
+                            RespDataTypes::BulkString("PSYNC".to_string()),
+                            RespDataTypes::BulkString(self.get_master_id()),
+                            RespDataTypes::BulkString(self.get_replication_offset().to_string()),
+                        ])
+                        .to_string()
+                        .as_bytes(),
+                    )
+                    .await
+                    .with_context(|| "Could not send REPLCONF capa command to master")?;
 
-        println!("Handshake (3/3) Master response: {}", res);
+                stream
+                    .read(buffer)
+                    .await
+                    .with_context(|| "Could not read master response")?;
 
-        let mut splits = res.split_whitespace();
+                let res = String::from_utf8_lossy(buffer);
 
-        ensure!(
-            res.starts_with("+FULLRESYNC"),
-            "Master did not respond with FULLRESYNC to PSYNC command"
-        );
+                println!("Handshake (3/3) Master response: {}", res);
 
-        let master_id = splits
-            .nth(1)
-            .ok_or_else(|| anyhow::anyhow!("Could not parse master ID from response"))?
-            .to_string();
+                let mut splits = res.split_whitespace();
 
-        let replication_offset = splits
-            .nth(2)
-            .ok_or_else(|| anyhow::anyhow!("Could not parse replication offset from response"))?
-            .parse::<i64>()
-            .with_context(|| "Could not parse replication offset")?;
+                ensure!(
+                    res.starts_with("+FULLRESYNC"),
+                    "Master did not respond with FULLRESYNC to PSYNC command"
+                );
 
-        println!("Master ID: {master_id}");
-        println!("Replication offset: {replication_offset}");
+                let master_id = splits
+                    .nth(1)
+                    .ok_or_else(|| anyhow::anyhow!("Could not parse master ID from response"))?
+                    .to_string();
 
-        self.set_master_id(master_id);
-        self.set_replication_offset(replication_offset);
+                let replication_offset = splits
+                    .nth(2)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Could not parse replication offset from response")
+                    })?
+                    .parse::<i64>()
+                    .with_context(|| "Could not parse replication offset")?;
 
-        Ok(())
+                println!("Master ID: {master_id}");
+                println!("Replication offset: {replication_offset}");
+
+                self.set_master_id(master_id);
+                self.set_replication_offset(replication_offset);
+
+                Ok(RespDataTypes::SimpleString("Ok".to_string()))
+            }
+        }
     }
 
     pub fn get_replication_status(&self) -> String {
