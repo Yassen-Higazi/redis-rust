@@ -43,7 +43,7 @@ impl ServerState {
         self.replication.get_replication_status()
     }
 
-    pub async fn init_replica(&self) -> anyhow::Result<()> {
+    pub async fn init_replica(&mut self) -> anyhow::Result<()> {
         self.replication.init().await
     }
 }

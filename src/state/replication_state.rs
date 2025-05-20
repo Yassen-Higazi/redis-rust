@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -27,6 +27,8 @@ pub enum Replica {
 
     Slave {
         id: String,
+        master_id: String,
+        master_offset: i64,
         address: SocketAddr,
         master_address: SocketAddr,
     },
@@ -53,12 +55,14 @@ impl Replica {
     pub fn new_slave(port: u16, master_address: Option<SocketAddr>) -> Self {
         Self::Slave {
             id: gen_id(),
+            master_offset: -1,
+            master_id: String::from("?"),
             master_address: master_address.expect("Master address is required for slave"),
             address: SocketAddr::from(([127, 0, 0, 1], port)),
         }
     }
 
-    pub async fn init(&self) -> anyhow::Result<()> {
+    pub async fn init(&mut self) -> anyhow::Result<()> {
         match self {
             Self::Master { .. } => Ok(()),
 
@@ -92,14 +96,62 @@ impl Replica {
         }
     }
 
-    async fn master_handshake(&self) -> anyhow::Result<()> {
+    fn get_master_id(&self) -> String {
+        match self {
+            Self::Master { id, .. } => id.clone(),
+            Self::Slave { master_id, .. } => master_id.clone(),
+        }
+    }
+
+    fn get_replication_offset(&self) -> i64 {
+        match self {
+            Self::Master {
+                replication_offset, ..
+            } => *replication_offset,
+            Self::Slave { master_offset, .. } => *master_offset,
+        }
+    }
+
+    fn set_replication_offset(&mut self, offset: i64) {
+        match self {
+            Self::Master {
+                replication_offset, ..
+            } => *replication_offset = offset,
+            Self::Slave { master_offset, .. } => *master_offset = offset,
+        }
+    }
+
+    fn set_master_id(&mut self, id: String) {
+        match self {
+            Self::Master { .. } => {}
+            Self::Slave { master_id, .. } => *master_id = id,
+        }
+    }
+
+    async fn master_handshake(&mut self) -> anyhow::Result<()> {
         let mut stream = TcpStream::connect(self.get_master_address().unwrap())
             .await
             .with_context(|| "Could not connect to master")?;
 
+        self.ping_master(&mut stream)
+            .await
+            .with_context(|| "Could not ping master")?;
+
+        self.replconf(&mut stream)
+            .await
+            .with_context(|| "Could not send REPLCONF command to master")?;
+
+        self.psync(&mut stream)
+            .await
+            .with_context(|| "Could not send PSYNC command to master")?;
+
+        Ok(())
+    }
+
+    async fn ping_master(&self, stream: &mut TcpStream) -> anyhow::Result<()> {
         stream
             .write_all(
-                RespDataTypes::from(vec![String::from("PING")])
+                RespDataTypes::Array(vec![RespDataTypes::BulkString("PING".to_string())])
                     .to_string()
                     .as_bytes(),
             )
@@ -117,6 +169,12 @@ impl Replica {
             "Handshake (1/3) Master response: {}",
             String::from_utf8_lossy(buffer)
         );
+
+        Ok(())
+    }
+
+    async fn replconf(&self, stream: &mut TcpStream) -> anyhow::Result<()> {
+        let buffer = &mut [0u8; 512];
 
         stream
             .write_all(
@@ -143,10 +201,10 @@ impl Replica {
 
         stream
             .write_all(
-                RespDataTypes::from(vec![
-                    String::from("REPLCONF"),
-                    String::from("capa"),
-                    String::from("psync2"),
+                RespDataTypes::Array(vec![
+                    RespDataTypes::BulkString("REPLCONF".to_string()),
+                    RespDataTypes::BulkString("capa".to_string()),
+                    RespDataTypes::BulkString("psync2".to_string()),
                 ])
                 .to_string()
                 .as_bytes(),
@@ -164,14 +222,57 @@ impl Replica {
             String::from_utf8_lossy(buffer)
         );
 
-        // let mut buffer = [0u8; 512];
-        //
-        // stream
-        //     .read_exact(&mut buffer)
-        //     .await
-        //     .with_context(|| "Could not read master response")?;
-        //
-        // println!("Master response: {}", String::from_utf8_lossy(&buffer));
+        Ok(())
+    }
+
+    async fn psync(&mut self, stream: &mut TcpStream) -> anyhow::Result<()> {
+        let buffer = &mut [0u8; 512];
+
+        stream
+            .write_all(
+                RespDataTypes::Array(vec![
+                    RespDataTypes::BulkString("PSYNC".to_string()),
+                    RespDataTypes::BulkString(self.get_master_id()),
+                    RespDataTypes::BulkString(self.get_replication_offset().to_string()),
+                ])
+                .to_string()
+                .as_bytes(),
+            )
+            .await
+            .with_context(|| "Could not send REPLCONF capa command to master")?;
+
+        stream
+            .read(buffer)
+            .await
+            .with_context(|| "Could not read master response")?;
+
+        let res = String::from_utf8_lossy(buffer);
+
+        println!("Handshake (3/3) Master response: {}", res);
+
+        let mut splits = res.split_whitespace();
+
+        ensure!(
+            res.starts_with("+FULLRESYNC"),
+            "Master did not respond with FULLRESYNC to PSYNC command"
+        );
+
+        let master_id = splits
+            .nth(1)
+            .ok_or_else(|| anyhow::anyhow!("Could not parse master ID from response"))?
+            .to_string();
+
+        let replication_offset = splits
+            .nth(2)
+            .ok_or_else(|| anyhow::anyhow!("Could not parse replication offset from response"))?
+            .parse::<i64>()
+            .with_context(|| "Could not parse replication offset")?;
+
+        println!("Master ID: {master_id}");
+        println!("Replication offset: {replication_offset}");
+
+        self.set_master_id(master_id);
+        self.set_replication_offset(replication_offset);
 
         Ok(())
     }

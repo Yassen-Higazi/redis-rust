@@ -22,7 +22,7 @@ impl RedisServer {
     }
 
     pub async fn listen(&self) -> anyhow::Result<()> {
-        let state = self.state.read().await;
+        let mut state = self.state.write().await;
 
         let address = state.get_address().await;
         let rdb = RDB::new(&state.get_rdb_path().await)?;
