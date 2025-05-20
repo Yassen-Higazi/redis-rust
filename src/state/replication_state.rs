@@ -30,12 +30,12 @@ pub enum Replica {
         master_id: String,
         master_offset: i64,
         address: SocketAddr,
-        master_address: SocketAddr,
+        master_address: String,
     },
 }
 
 impl Replica {
-    pub fn new(port: u16, role: Role, master_address: Option<SocketAddr>) -> Self {
+    pub fn new(port: u16, role: Role, master_address: Option<String>) -> Self {
         match role {
             Role::Master => Self::new_master(),
 
@@ -52,7 +52,7 @@ impl Replica {
         }
     }
 
-    pub fn new_slave(port: u16, master_address: Option<SocketAddr>) -> Self {
+    pub fn new_slave(port: u16, master_address: Option<String>) -> Self {
         Self::Slave {
             id: gen_id(),
             master_offset: -1,
@@ -66,14 +66,17 @@ impl Replica {
         match self {
             Self::Master { .. } => Ok(()),
 
-            Self::Slave { master_address, .. } => {
+            Self::Slave { .. } => {
                 println!("Initializing slave replica...");
-                println!("Connecting to master at {}", master_address);
+                println!(
+                    "Connecting to master at {}",
+                    self.get_master_address().unwrap()
+                );
 
                 self.master_handshake()
                     .await
                     .map_err(|e| {
-                        println!("Error pinging master: {e:?}");
+                        println!("Error In master handshake: {e:?}");
                     })
                     .unwrap_or(());
 
@@ -82,10 +85,10 @@ impl Replica {
         }
     }
 
-    fn get_master_address(&self) -> Option<SocketAddr> {
+    fn get_master_address(&self) -> Option<String> {
         match self {
             Self::Master { .. } => None,
-            Self::Slave { master_address, .. } => Some(*master_address),
+            Self::Slave { master_address, .. } => Some(master_address.clone()),
         }
     }
 
@@ -234,11 +237,9 @@ impl Replica {
                 id,
                 replication_offset,
                 ..
-            } => {
-                return Ok(RespDataTypes::SimpleString(format!(
-                    "FULLRESYNC {id} {replication_offset}"
-                )));
-            }
+            } => Ok(RespDataTypes::SimpleString(format!(
+                "FULLRESYNC {id} {replication_offset}"
+            ))),
 
             Self::Slave { .. } => {
                 let buffer = &mut [0u8; 512];
@@ -269,18 +270,22 @@ impl Replica {
 
                 let mut splits = res.split_whitespace();
 
+                let command = splits
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("Could not parse master response"))?;
+
                 ensure!(
-                    res.starts_with("+FULLRESYNC"),
+                    command == "+FULLRESYNC",
                     "Master did not respond with FULLRESYNC to PSYNC command"
                 );
 
                 let master_id = splits
-                    .nth(1)
+                    .next()
                     .ok_or_else(|| anyhow::anyhow!("Could not parse master ID from response"))?
                     .to_string();
 
                 let replication_offset = splits
-                    .nth(2)
+                    .next()
                     .ok_or_else(|| {
                         anyhow::anyhow!("Could not parse replication offset from response")
                     })?
@@ -292,6 +297,15 @@ impl Replica {
 
                 self.set_master_id(master_id);
                 self.set_replication_offset(replication_offset);
+
+                stream
+                    .read(buffer)
+                    .await
+                    .with_context(|| "Could not read master response")?;
+
+                let res = String::from_utf8_lossy(buffer);
+
+                println!("Master Responseded with RDB file: {}", res);
 
                 Ok(RespDataTypes::SimpleString("Ok".to_string()))
             }

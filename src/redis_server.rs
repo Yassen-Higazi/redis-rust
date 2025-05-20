@@ -73,15 +73,10 @@ impl RedisServer {
                             let command = String::from_utf8(buffer[0..bytes_read].to_vec())
                                 .expect("Could not convert string");
 
-                            let result = service_clone.execute_command(&command).await;
+                            let result = service_clone.execute_command(&command, &mut stream).await;
 
                             match result {
-                                Ok(response) => {
-                                    stream
-                                        .write_all(response.to_string().as_bytes())
-                                        .await
-                                        .unwrap();
-                                }
+                                Ok(_) => {}
 
                                 Err(err) => {
                                     println!("Error: {:?}", err);

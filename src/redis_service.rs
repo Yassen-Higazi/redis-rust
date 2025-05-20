@@ -1,6 +1,10 @@
 use chrono::Utc;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 
 use crate::database::Database;
@@ -8,7 +12,7 @@ use crate::persistence::persistence_interface::Persistent;
 use crate::resp::{Commands, RespDataTypes};
 use crate::state::server_state::ServerState;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 
 #[derive(Debug)]
 pub struct RedisService {
@@ -43,7 +47,34 @@ impl RedisService {
             .clone();
     }
 
-    pub async fn execute_command(&self, command: &str) -> anyhow::Result<RespDataTypes> {
+    async fn read_rdb_file(&self, path: PathBuf) -> anyhow::Result<Vec<u8>> {
+        println!("RDB Path: {path:?}");
+
+        let buffer = if let Ok(file) = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .await
+            .with_context(|| "could not open rdb file")
+        {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            let mut reader = BufReader::new(file);
+
+            reader.read_to_end(&mut buffer).await?;
+
+            buffer
+        } else {
+            hex::decode("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap()
+        };
+
+        Ok(buffer)
+    }
+
+    pub async fn execute_command(
+        &self,
+        command: &str,
+        stream: &mut TcpStream,
+    ) -> anyhow::Result<()> {
         let command_vec = command.split("\r\n").collect::<Vec<&str>>();
 
         let data_result = RespDataTypes::try_from(command_vec[..command_vec.len() - 1].to_vec());
@@ -55,16 +86,16 @@ impl RedisService {
         match cmd {
             Ok(cmd) => {
                 let response = match cmd {
-                    Commands::Ping => RespDataTypes::SimpleString("PONG".to_string()),
+                    Commands::Ping => Some(RespDataTypes::SimpleString("PONG".to_string())),
 
-                    Commands::Echo(message) => RespDataTypes::SimpleString(message),
+                    Commands::Echo(message) => Some(RespDataTypes::SimpleString(message)),
 
                     Commands::Set(key, value, expiration) => {
                         let db = self.get_selected_db().await;
 
                         db.insert(key, value.clone(), expiration).await;
 
-                        RespDataTypes::SimpleString("OK".to_string())
+                        Some(RespDataTypes::SimpleString("OK".to_string()))
                     }
 
                     Commands::Get(key) => {
@@ -90,7 +121,7 @@ impl RedisService {
 
                         println!("Get result: {}", result);
 
-                        result
+                        Some(result)
                     }
 
                     Commands::Keys(key) => {
@@ -102,7 +133,7 @@ impl RedisService {
                             db.keys_from_pattren(&key).await
                         };
 
-                        RespDataTypes::from(result_vec)
+                        Some(RespDataTypes::from(result_vec))
                     }
 
                     Commands::Config(options) => {
@@ -135,7 +166,7 @@ impl RedisService {
                                         }
                                     }
 
-                                    RespDataTypes::from(res)
+                                    Some(RespDataTypes::from(res))
                                 }
 
                                 _ => {
@@ -154,13 +185,13 @@ impl RedisService {
                             _ => bail!("Invalid Info Sub command"),
                         };
 
-                        RespDataTypes::BulkString(result)
+                        Some(RespDataTypes::BulkString(result))
                     }
 
                     Commands::REPLCONF(op1, op2) => {
                         println!("REPLCONF {op1} {op2}");
 
-                        RespDataTypes::SimpleString("OK".to_string())
+                        Some(RespDataTypes::SimpleString("OK".to_string()))
                     }
 
                     Commands::PSYNC(op1, op2) => {
@@ -168,11 +199,50 @@ impl RedisService {
 
                         let mut server_state = self.state.write().await;
 
-                        server_state.psync().await?
+                        let res = server_state.psync().await?;
+
+                        stream.write_all(res.to_string().as_bytes()).await?;
+
+                        let path = server_state.get_rdb_path().await;
+
+                        let buffer = self.read_rdb_file(path).await?;
+
+                        stream
+                            .write_all(
+                                [
+                                    format!("${}\r\n", buffer.len()).as_bytes(),
+                                    buffer.as_slice(),
+                                ]
+                                .concat()
+                                .as_slice(),
+                            )
+                            .await
+                            .with_context(|| "could not write to stream")?;
+
+                        None
                     }
                 };
 
-                Ok(response)
+                match response {
+                    Some(resp) => {
+                        println!("Response: {resp:?}");
+
+                        stream
+                            .write_all(resp.to_string().as_bytes())
+                            .await
+                            .with_context(|| "could not write to stream")
+                            .map_err(|e| {
+                                println!("{e:?}");
+                            })
+                            .unwrap_or(());
+                    }
+
+                    None => {
+                        println!("No response");
+                    }
+                }
+
+                Ok(())
             }
 
             Err(message) => bail!(message),

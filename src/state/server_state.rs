@@ -24,7 +24,7 @@ impl ServerState {
             replication: Replica::new(
                 config.port.parse::<u16>().unwrap(),
                 config.replication_role.clone(),
-                config.get_master_address(),
+                config.get_master_address().clone(),
             ),
             config: RwLock::new(config),
         }
