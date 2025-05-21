@@ -57,8 +57,8 @@ impl Replica {
             id: gen_id(),
             master_offset: -1,
             master_id: String::from("?"),
-            master_address: master_address.expect("Master address is required for slave"),
             address: SocketAddr::from(([127, 0, 0, 1], port)),
+            master_address: master_address.expect("Master address is required for slave"),
         }
     }
 
@@ -82,6 +82,43 @@ impl Replica {
 
                 Ok(())
             }
+        }
+    }
+
+    pub fn register_replica(&mut self, replica_addres: SocketAddr) -> anyhow::Result<()> {
+        match self {
+            Self::Master {
+                slaves,
+                id,
+                address,
+                ..
+            } => {
+                println!("Registering replica...");
+
+                let slave_exist = slaves
+                    .iter()
+                    .any(|s| s.get_address().port() == replica_addres.port());
+
+                if slave_exist {
+                    println!("Slave already exists");
+                    return Ok(());
+                }
+
+                let slave = Self::Slave {
+                    id: gen_id(),
+                    master_offset: -1,
+                    master_id: id.clone(),
+                    master_address: address.to_string(),
+                    address: replica_addres,
+                };
+
+                slaves.push(slave);
+
+                println!("Slaves: {:?}", slaves);
+
+                Ok(())
+            }
+            Self::Slave { .. } => Ok(()),
         }
     }
 

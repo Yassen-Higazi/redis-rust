@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{net::SocketAddr, path::PathBuf};
 
 use tokio::sync::RwLock;
 
@@ -13,8 +13,8 @@ use super::replication_state::Replica;
 #[derive(Debug)]
 pub struct ServerState {
     id: String,
-    config: RwLock<Configuration>,
     replication: Replica,
+    config: RwLock<Configuration>,
 }
 
 impl ServerState {
@@ -52,6 +52,10 @@ impl ServerState {
 
     pub async fn psync(&mut self) -> anyhow::Result<RespDataTypes> {
         self.replication.psync(None).await
+    }
+
+    pub async fn register_replica(&mut self, replica_address: SocketAddr) -> anyhow::Result<()> {
+        self.replication.register_replica(replica_address)
     }
 }
 

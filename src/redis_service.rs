@@ -191,6 +191,19 @@ impl RedisService {
                     Commands::REPLCONF(op1, op2) => {
                         println!("REPLCONF {op1} {op2}");
 
+                        if op1.to_lowercase() == "listening-port" {
+                            let port = op2.parse::<u16>().unwrap();
+                            let mut replica_address = stream.peer_addr().unwrap();
+
+                            replica_address.set_port(port);
+
+                            let mut server_state = self.state.write().await;
+
+                            server_state.register_replica(replica_address).await?;
+
+                            println!("Registered replica on port {port}");
+                        }
+
                         Some(RespDataTypes::SimpleString("OK".to_string()))
                     }
 
