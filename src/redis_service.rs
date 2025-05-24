@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::database::Database;
 use crate::persistence::persistence_interface::Persistent;
@@ -22,7 +22,7 @@ pub struct RedisService {
 }
 
 impl RedisService {
-    pub async fn new(
+    pub fn new(
         configs: Arc<RwLock<ServerState>>,
         mut persistent_layer: Box<dyn Persistent>,
     ) -> Self {
@@ -72,16 +72,20 @@ impl RedisService {
 
     pub async fn execute_command(
         &self,
-        command: &str,
-        stream: &mut TcpStream,
+        buffer: &[u8],
+        stream: Arc<Mutex<TcpStream>>,
     ) -> anyhow::Result<()> {
-        let command_vec = command.split("\r\n").collect::<Vec<&str>>();
+        let command_str = String::from_utf8(buffer.to_vec()).expect("Could not convert string");
+
+        let command_vec = command_str.split("\r\n").collect::<Vec<&str>>();
 
         let data_result = RespDataTypes::try_from(command_vec[..command_vec.len() - 1].to_vec());
 
         let data = data_result.expect("Invalid command");
 
         let cmd = Commands::try_from(data);
+
+        let mut stream_guard = stream.lock().await;
 
         match cmd {
             Ok(cmd) => {
@@ -91,9 +95,28 @@ impl RedisService {
                     Commands::Echo(message) => Some(RespDataTypes::SimpleString(message)),
 
                     Commands::Set(key, value, expiration) => {
+                        println!("SET {} {}", key, value);
                         let db = self.get_selected_db().await;
 
-                        db.insert(key, value.clone(), expiration).await;
+                        db.insert(key.clone(), value.clone(), expiration).await;
+
+                        let mut res_vec = vec![
+                            RespDataTypes::BulkString("SET".to_string()),
+                            RespDataTypes::BulkString(key),
+                            RespDataTypes::BulkString(value),
+                        ];
+
+                        if let Some(exp) = expiration {
+                            res_vec.push(RespDataTypes::BulkString(exp.to_string()));
+                        }
+
+                        self.state
+                            .write()
+                            .await
+                            .replicate_command(&RespDataTypes::Array(res_vec))
+                            .await?;
+
+                        println!("Set result: OK");
 
                         Some(RespDataTypes::SimpleString("OK".to_string()))
                     }
@@ -147,12 +170,8 @@ impl RedisService {
 
                                         match attribute {
                                             Some(attr) => {
-                                                let value = self
-                                                    .state
-                                                    .read()
-                                                    .await
-                                                    .get_from_config(attr)
-                                                    .await;
+                                                let value =
+                                                    self.state.read().await.get_from_config(attr);
 
                                                 if let Some(value) = value {
                                                     res.push(attr.to_owned());
@@ -192,16 +211,13 @@ impl RedisService {
                         println!("REPLCONF {op1} {op2}");
 
                         if op1.to_lowercase() == "listening-port" {
-                            let port = op2.parse::<u16>().unwrap();
-                            let mut replica_address = stream.peer_addr().unwrap();
-
-                            replica_address.set_port(port);
+                            drop(stream_guard);
 
                             let mut server_state = self.state.write().await;
 
-                            server_state.register_replica(replica_address).await?;
+                            server_state.register_replica(stream.clone()).await?;
 
-                            println!("Registered replica on port {port}");
+                            stream_guard = stream.lock().await;
                         }
 
                         Some(RespDataTypes::SimpleString("OK".to_string()))
@@ -214,13 +230,13 @@ impl RedisService {
 
                         let res = server_state.psync().await?;
 
-                        stream.write_all(res.to_string().as_bytes()).await?;
+                        stream_guard.write_all(res.to_string().as_bytes()).await?;
 
-                        let path = server_state.get_rdb_path().await;
+                        let path = server_state.get_rdb_path();
 
                         let buffer = self.read_rdb_file(path).await?;
 
-                        stream
+                        stream_guard
                             .write_all(
                                 [
                                     format!("${}\r\n", buffer.len()).as_bytes(),
@@ -238,14 +254,12 @@ impl RedisService {
 
                 match response {
                     Some(resp) => {
-                        println!("Response: {resp:?}");
-
-                        stream
+                        stream_guard
                             .write_all(resp.to_string().as_bytes())
                             .await
                             .with_context(|| "could not write to stream")
                             .map_err(|e| {
-                                println!("{e:?}");
+                                println!("Error: {:?}", e);
                             })
                             .unwrap_or(());
                     }
@@ -255,10 +269,21 @@ impl RedisService {
                     }
                 }
 
-                Ok(())
+                // Ok(())
             }
 
-            Err(message) => bail!(message),
-        }
+            Err(message) => {
+                println!("Error: {:?}", message);
+
+                stream_guard
+                    .write(format!("-{message}\r\n").as_bytes())
+                    .await
+                    .with_context(|| format!("Error writing error to socket: {message:?}"))?;
+
+                // Ok(())
+            }
+        };
+
+        Ok(())
     }
 }

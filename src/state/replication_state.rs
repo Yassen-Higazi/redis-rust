@@ -1,9 +1,11 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
-use anyhow::{ensure, Context};
+use anyhow::{bail, ensure, Context};
+use socket2::{SockRef, TcpKeepalive};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
+    sync::Mutex,
 };
 
 use crate::{resp::RespDataTypes, utils::gen_id};
@@ -16,7 +18,7 @@ pub enum Role {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Replica {
     Master {
         id: String,
@@ -31,6 +33,7 @@ pub enum Replica {
         master_offset: i64,
         address: SocketAddr,
         master_address: String,
+        master_connection: Option<Arc<Mutex<TcpStream>>>,
     },
 }
 
@@ -56,15 +59,16 @@ impl Replica {
         Self::Slave {
             id: gen_id(),
             master_offset: -1,
+            master_connection: None,
             master_id: String::from("?"),
             address: SocketAddr::from(([127, 0, 0, 1], port)),
             master_address: master_address.expect("Master address is required for slave"),
         }
     }
 
-    pub async fn init(&mut self) -> anyhow::Result<()> {
+    pub async fn init(&mut self) -> anyhow::Result<Arc<Mutex<TcpStream>>> {
         match self {
-            Self::Master { .. } => Ok(()),
+            Self::Master { .. } => bail!("Master replica cannot be initialized this way"),
 
             Self::Slave { .. } => {
                 println!("Initializing slave replica...");
@@ -73,19 +77,20 @@ impl Replica {
                     self.get_master_address().unwrap()
                 );
 
-                self.master_handshake()
-                    .await
-                    .map_err(|e| {
-                        println!("Error In master handshake: {e:?}");
-                    })
-                    .unwrap_or(());
-
-                Ok(())
+                self.master_handshake().await.with_context(|| {
+                    format!(
+                        "Could not initialize slave replica at {}",
+                        self.get_address()
+                    )
+                })
             }
         }
     }
 
-    pub fn register_replica(&mut self, replica_addres: SocketAddr) -> anyhow::Result<()> {
+    pub async fn register_replica(
+        &mut self,
+        connection: Arc<Mutex<TcpStream>>,
+    ) -> anyhow::Result<()> {
         match self {
             Self::Master {
                 slaves,
@@ -94,6 +99,14 @@ impl Replica {
                 ..
             } => {
                 println!("Registering replica...");
+
+                let stream = connection.lock().await;
+
+                let replica_addres = stream
+                    .peer_addr()
+                    .with_context(|| "Could not get peer address")?;
+
+                drop(stream);
 
                 let slave_exist = slaves
                     .iter()
@@ -104,12 +117,15 @@ impl Replica {
                     return Ok(());
                 }
 
+                println!("Registering slave at {replica_addres}");
+
                 let slave = Self::Slave {
                     id: gen_id(),
                     master_offset: -1,
                     master_id: id.clone(),
-                    master_address: address.to_string(),
                     address: replica_addres,
+                    master_address: address.to_string(),
+                    master_connection: Some(connection),
                 };
 
                 slaves.push(slave);
@@ -118,8 +134,52 @@ impl Replica {
 
                 Ok(())
             }
+
             Self::Slave { .. } => Ok(()),
         }
+    }
+
+    pub async fn replicate_command(&mut self, command: &RespDataTypes) -> anyhow::Result<()> {
+        match self {
+            Self::Master { slaves, .. } => {
+                println!("Slave count: {}", slaves.len());
+
+                for slave in slaves {
+                    match slave {
+                        Self::Slave {
+                            master_connection,
+                            address,
+                            ..
+                        } => {
+                            if let Some(stream) = master_connection {
+                                println!("Replicating command to slave at {address}");
+
+                                let mut stream_guard = stream.lock().await;
+
+                                stream_guard
+                                    .write_all(command.to_string().as_bytes())
+                                    .await
+                                    .with_context(|| {
+                                        format!(
+                                            "Could not send command: {command} to slave {address}"
+                                        )
+                                    })?;
+
+                                println!("Command replicated to slave at {}", address);
+                            }
+                        }
+
+                        Self::Master { .. } => {}
+                    };
+                }
+            }
+
+            Self::Slave { .. } => {
+                println!("Slave cannot replicate command");
+            }
+        };
+
+        Ok(())
     }
 
     fn get_master_address(&self) -> Option<String> {
@@ -168,24 +228,36 @@ impl Replica {
         }
     }
 
-    async fn master_handshake(&mut self) -> anyhow::Result<()> {
-        let mut stream = TcpStream::connect(self.get_master_address().unwrap())
+    async fn master_handshake(&mut self) -> anyhow::Result<Arc<Mutex<TcpStream>>> {
+        let stream = TcpStream::connect(self.get_master_address().unwrap())
             .await
             .with_context(|| "Could not connect to master")?;
 
-        self.ping_master(&mut stream)
+        let ka = TcpKeepalive::new().with_time(std::time::Duration::from_secs(180));
+        let sf = SockRef::from(&stream);
+        sf.set_tcp_keepalive(&ka)?;
+
+        let connection = Arc::new(Mutex::new(stream));
+
+        let mut connection_guard = connection.lock().await;
+
+        self.ping_master(&mut connection_guard)
             .await
             .with_context(|| "Could not ping master")?;
 
-        self.replconf(&mut stream)
+        self.replconf(&mut connection_guard)
             .await
             .with_context(|| "Could not send REPLCONF command to master")?;
 
-        self.psync(Some(&mut stream))
+        self.psync(Some(&mut connection_guard))
             .await
             .with_context(|| "Could not send PSYNC command to master")?;
 
-        Ok(())
+        drop(connection_guard);
+
+        self.set_master_connection(connection.clone());
+
+        Ok(connection)
     }
 
     async fn ping_master(&self, stream: &mut TcpStream) -> anyhow::Result<()> {
@@ -376,5 +448,14 @@ role:slave
 slave_replid:{id} "
             ),
         }
+    }
+
+    fn set_master_connection(&mut self, connection: Arc<Mutex<TcpStream>>) {
+        match self {
+            Self::Master { .. } => {}
+            Self::Slave {
+                master_connection, ..
+            } => *master_connection = Some(connection),
+        };
     }
 }

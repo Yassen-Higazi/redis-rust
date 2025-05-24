@@ -557,6 +557,7 @@ dependencies = [
  "hex",
  "rand",
  "regex",
+ "socket2",
  "thiserror",
  "tokio",
 ]
